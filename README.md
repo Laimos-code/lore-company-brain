@@ -233,6 +233,7 @@ To host Lore on a small cloud server (DigitalOcean, AWS EC2, Hetzner, or GitHub 
    }
    ```
    Or use Cloudflare Tunnel without opening any inbound ports.
+5. Behind a proxy, set `TRUST_PROXY=1` in `.env` and restart (`docker compose up -d`) so the rate limit sees each visitor's real IP. Leave it unset when visitors connect directly, otherwise anyone could fake their IP.
 
 ---
 

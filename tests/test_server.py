@@ -2,6 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main
 from app.main import app, rate_limiter
 
 client = TestClient(app)
@@ -45,8 +46,9 @@ def test_ask_decision_trail():
     assert data.get("is_stub") is True
 
 
-def test_ask_rate_limiting():
-    """Verify rate limiter blocks client after 20 queries in a minute."""
+def test_ask_rate_limiting(monkeypatch):
+    """Verify rate limiter blocks client after 20 queries in a minute (behind our proxy)."""
+    monkeypatch.setattr(main, "TRUST_PROXY", True)
     client_ip = "192.168.1.99"
     headers = {"x-forwarded-for": client_ip}
 
@@ -63,6 +65,18 @@ def test_ask_rate_limiting():
     assert resp_blocked.status_code == 429
     err = resp_blocked.json()
     assert "Rate limit exceeded" in err.get("error", "")
+
+
+def test_rate_limit_ignores_fake_forwarded_header():
+    """A visitor can't dodge the limit by sending a different fake IP each time."""
+    rate_limiter.requests.clear()
+    codes = [
+        client.post("/api/ask", json={"question": f"Q{i}"},
+                    headers={"x-forwarded-for": f"10.0.0.{i}"}).status_code
+        for i in range(21)
+    ]
+    assert codes[:20] == [200] * 20
+    assert codes[20] == 429
 
 
 def test_action_approve_endpoint():

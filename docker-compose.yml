@@ -32,6 +32,8 @@ services:
     environment:
       - FALKORDB_HOST=falkordb
       - FALKORDB_PORT=6379
+      # 1 = behind our own proxy (Caddy / Cloudflare); read the visitor IP it adds
+      - TRUST_PROXY=${TRUST_PROXY:-0}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-}

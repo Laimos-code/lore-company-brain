@@ -26,6 +26,8 @@ load_dotenv()
 # from a fresh copy of .env.example fall back to the defaults instead of crashing.
 FALKORDB_HOST = os.getenv("FALKORDB_HOST") or "localhost"
 FALKORDB_PORT = int(os.getenv("FALKORDB_PORT") or "6379")
+# Set TRUST_PROXY=1 only when the app sits behind our own reverse proxy.
+TRUST_PROXY = os.getenv("TRUST_PROXY", "") == "1"
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "")
@@ -96,10 +98,17 @@ rate_limiter = SlidingWindowRateLimiter(max_requests=20, window_seconds=60.0)
 
 
 def get_client_ip(request: Request) -> str:
-    """Extract client IP, respecting X-Forwarded-For if behind a proxy."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Find the visitor's IP for rate limiting.
+
+    X-Forwarded-For is a header anyone can write, so by default we ignore it and
+    use the real connection's IP. Only when TRUST_PROXY=1 (we run behind our own
+    Caddy / Cloudflare proxy) do we read it, and then we take the LAST entry:
+    that is the one our proxy added, so visitors can't fake it.
+    """
+    if TRUST_PROXY:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "127.0.0.1"
 
 
