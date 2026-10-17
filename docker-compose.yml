@@ -5,8 +5,9 @@ services:
     container_name: lore-falkordb
     restart: unless-stopped
     volumes:
-      # Persistent volume ensuring graph data survives restarts
-      - falkordb_data:/data
+      # Persistent volume ensuring graph data survives restarts.
+      # This image saves to /var/lib/falkordb/data (/data only holds a link to it).
+      - falkordb_data:/var/lib/falkordb/data
     # SECURITY REQUIREMENT:
     # Ports 6379 & 3000 must NOT be exposed to the public internet.
     # We bind them strictly to 127.0.0.1 on the host (data loading + Browser UI),
