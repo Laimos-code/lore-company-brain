@@ -61,7 +61,7 @@ def minor(v):
     return int(m.group(1)) if m else None
 
 # ---------- read the team registry ----------
-org = yaml.safe_load(open(os.path.join(data_dir, "community", "sigs.yaml")))
+org = yaml.safe_load(open(os.path.join(data_dir, "community", "sigs.yaml"), encoding="utf-8"))
 teams, leads, subprojects = [], [], []
 for kind, group in (("sig", "sigs"), ("workinggroup", "workinggroups"), ("committee", "committees")):
     for t in org.get(group) or []:
@@ -79,7 +79,7 @@ for kind, group in (("sig", "sigs"), ("workinggroup", "workinggroups"), ("commit
 keps, people_edges, team_edges, kep_links, gates, stages = [], [], [], [], [], []
 for f in glob.glob(os.path.join(data_dir, "enhancements", "keps", "**", "kep.yaml"), recursive=True):
     try:
-        k = yaml.safe_load(open(f)) or {}
+        k = yaml.safe_load(open(f, encoding="utf-8")) or {}
     except Exception:
         continue
     num = str(k.get("kep-number", "")).strip()

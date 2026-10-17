@@ -1,0 +1,6 @@
+services:
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      - "6379:6379"   # Redis-compatible API (Python client connects here)
+      - "3000:3000"   # Browser UI at http://localhost:3000
