@@ -1,11 +1,11 @@
 # AI Usage Log
 
-This project was built with AI assistance as part of the WeMakeDevs × FalkorDB Graph Hacks hackathon.
+This project was built with AI assistance as part of the WeMakeDevs x FalkorDB Graph Hacks hackathon.
 All AI-generated code was reviewed, tested, and understood by the team before being committed.
 
-| Date       | Tool          | What it helped with                                                |
-|------------|---------------|--------------------------------------------------------------------|
-| 2026-10-17 | Claude (Opus) | Project scaffold: folder layout, requirements, docker-compose, README skeleton, load_k8s_brain.py review |
+| Date       | What AI helped with                                                |
+|------------|--------------------------------------------------------------------|
+| 2026-10-17 | Project scaffold: folder layout, requirements, docker-compose, README skeleton, load_k8s_brain.py review |
 
 ## Policy
 
