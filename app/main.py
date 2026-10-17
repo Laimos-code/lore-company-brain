@@ -22,8 +22,10 @@ from pydantic import BaseModel, Field
 # Load configuration from .env file
 load_dotenv()
 
-FALKORDB_HOST = os.getenv("FALKORDB_HOST", "localhost")
-FALKORDB_PORT = int(os.getenv("FALKORDB_PORT", "6379"))
+# `or` (not a getenv default) so that empty values like `FALKORDB_PORT=`
+# from a fresh copy of .env.example fall back to the defaults instead of crashing.
+FALKORDB_HOST = os.getenv("FALKORDB_HOST") or "localhost"
+FALKORDB_PORT = int(os.getenv("FALKORDB_PORT") or "6379")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "")
