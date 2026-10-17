@@ -286,7 +286,13 @@ async def ask_brain(req: AskRequest, request: Request) -> JSONResponse:
             content={"error": f"Agent execution failed: {str(e)}"},
         )
 
-    # 3. Fallback to stub contract if agent returned None or is in progress
+    # 3. No LLM agent: answer straight from the graph; stub only if FalkorDB is unreachable
+    if result is None:
+        try:
+            from app import brain
+            result = await asyncio.wait_for(asyncio.to_thread(brain.answer, question), timeout=30.0)
+        except Exception:
+            result = None
     if result is None:
         result = get_stub_response(question)
 

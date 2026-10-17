@@ -25,7 +25,7 @@ def test_health_endpoint():
 
 
 def test_ask_endpoint_stub_response():
-    """Verify POST /api/ask returns the verified stub structure with is_stub=true."""
+    """Verify POST /api/ask returns the contract shape (graph answer, or stub if FalkorDB is down)."""
     response = client.post("/api/ask", json={"question": "Who actually knows SIG Node?"})
     assert response.status_code == 200
     data = response.json()
@@ -33,7 +33,7 @@ def test_ask_endpoint_stub_response():
     assert "official_owners" in data
     assert "actual_knowers" in data
     assert "sources" in data
-    assert data.get("is_stub") is True
+    assert isinstance(data.get("is_stub"), bool)
 
 
 def test_ask_decision_trail():
@@ -42,7 +42,7 @@ def test_ask_decision_trail():
     assert response.status_code == 200
     data = response.json()
     assert "decision_trail" in data or "answer" in data
-    assert data.get("is_stub") is True
+    assert isinstance(data.get("is_stub"), bool)
 
 
 def test_ask_rate_limiting():
@@ -99,3 +99,33 @@ def test_demo_approve_rejects_bad_label_and_long_comment(monkeypatch):
     assert bad_label.status_code == 400 and bad_label.json()["ok"] is False
     too_long = client.post("/api/approve", json={"issue_number": 1, "comment": "x" * 2001, "labels": []})
     assert too_long.status_code == 400 and too_long.json()["ok"] is False
+
+
+def _graph_or_skip():
+    try:
+        from app.graph_tools import get_graph
+        g = get_graph()
+        if not g.query("MATCH (pr:PR) RETURN count(pr)").result_set[0][0]:
+            pytest.skip("graph not loaded")
+        return g
+    except Exception:
+        pytest.skip("FalkorDB not reachable")
+
+
+def test_brain_answers_from_graph():
+    """With the graph loaded, /api/ask answers are real (is_stub false) and use the right tool."""
+    g = _graph_or_skip()
+    from app.brain import answer
+    assert answer("Who actually knows SIG Node?", g)["tool"] == "who_knows"
+    trail = answer("Why did they choose gang scheduling?", g)
+    assert trail["tool"] == "decision_trail" and any(t["kep"] == "KEP-583" for t in trail["decision_trail"])
+    assert answer("What decisions are stuck at alpha?", g)["tool"] == "stale_decisions"
+
+
+def test_route_issue_picks_team_and_reviewers():
+    g = _graph_or_skip()
+    from app.graph_tools import route_issue
+    r = route_issue(g, "Gang of training pods partly scheduled", "scheduler places 5 of 8 pods; need all or nothing",
+                    ["sig-node", "sig-scheduling", "sig-auth", "sig-storage", "sig-network"])
+    assert r["team"] == "sig-scheduling" and r["label"] == "sig/scheduling"
+    assert r["reviewers"] and len(r["comment"]) <= 2000

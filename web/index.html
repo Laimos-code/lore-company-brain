@@ -616,6 +616,25 @@
         </div>
       </div>
     </section>
+
+    <!-- Live Triage: Lore suggests, a human approves, GitHub gets the comment -->
+    <section id="triage" class="search-card" style="margin-top: 1.5rem;">
+      <div class="answer-title" style="margin-bottom: 0.75rem;"><span>Live Triage (human-approved GitHub action)</span></div>
+      <div class="search-row">
+        <select id="triage-issue" class="search-input"><option>Loading practice issues...</option></select>
+        <button id="triage-route-btn" class="ask-btn"><span>Route with Lore</span></button>
+      </div>
+      <div id="triage-result" style="display:none; margin-top: 1rem;">
+        <div id="triage-summary" class="answer-body"></div>
+        <ul id="triage-reviewers" class="person-list"></ul>
+        <textarea id="triage-comment" class="search-input" rows="9" maxlength="2000" style="width:100%; margin-top:0.75rem; font-family:inherit;"></textarea>
+        <div class="bottom-bar">
+          <span id="triage-labels" class="sources-list"></span>
+          <button id="triage-approve-btn" class="approve-action-btn"><span>Approve &amp; post to GitHub</span></button>
+        </div>
+        <div id="triage-posted" class="answer-body" style="margin-top:0.5rem;"></div>
+      </div>
+    </section>
   </main>
 
   <div id="toast">
@@ -781,36 +800,88 @@
     });
 
     // Approve Button Action (Team Member C's Action Router)
-    approveBtn.addEventListener('click', async () => {
-      approveBtn.disabled = true;
+    approveBtn.addEventListener('click', () => {
+      document.getElementById('triage').scrollIntoView({ behavior: 'smooth' });
+    });
+
+
+    // Live Triage flow: GET /api/demo-issues -> GET /api/route-issue/{n} -> human edits -> POST /api/approve
+    const triageSelect = document.getElementById('triage-issue');
+    const triageRouteBtn = document.getElementById('triage-route-btn');
+    const triageResult = document.getElementById('triage-result');
+    const triageComment = document.getElementById('triage-comment');
+    const triageApproveBtn = document.getElementById('triage-approve-btn');
+    let triageLabels = [];
+
+    async function loadDemoIssues() {
       try {
-        const payload = {
-          action_id: 'act_' + Date.now(),
-          action_type: 'route_issue',
-          target_team: 'sig-node',
-          suggested_assignees: ['tallclair', 'dchen1107'],
-          comment_draft: 'Issue verified. Routing to @sig-node-leads. Based on decision graph history, @tallclair and @dchen1107 are the primary subject matter experts.',
-          approved_by: 'lead_maintainer'
-        };
-
-        const res = await fetch('/api/actions/approve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+        const res = await fetch('/api/demo-issues');
+        const data = await res.json();
+        triageSelect.innerHTML = '';
+        if (!Array.isArray(data)) throw new Error(data.error || 'unavailable');
+        data.forEach(i => {
+          const opt = document.createElement('option');
+          opt.value = i.number; opt.textContent = `#${i.number} ${i.title}`;
+          triageSelect.appendChild(opt);
         });
-
-        if (res.ok) {
-          const data = await res.json();
-          showToast(data.message || 'Action successfully approved and queued!');
-        } else {
-          showToast('Approval action failed.');
-        }
       } catch (err) {
-        showToast('Error sending approval: ' + err.message);
+        triageSelect.innerHTML = '<option>Practice repo not configured</option>';
+      }
+    }
+
+    triageRouteBtn.addEventListener('click', async () => {
+      triageRouteBtn.disabled = true;
+      document.getElementById('triage-posted').textContent = '';
+      try {
+        const res = await fetch('/api/route-issue/' + encodeURIComponent(triageSelect.value));
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+        triageResult.style.display = 'block';
+        const votes = Object.entries(data.team_votes || {}).map(([t, v]) => `${t} ${v}`).join(', ');
+        document.getElementById('triage-summary').textContent =
+          `Suggested team: ${data.team || 'none'}  (graph votes: ${votes})`;
+        const ul = document.getElementById('triage-reviewers');
+        ul.innerHTML = '';
+        (data.reviewers || []).forEach(r => {
+          const li = document.createElement('li');
+          li.className = 'person-row';
+          li.textContent = `@${r.login}  (${r.evidence.team_prs} team PRs reviewed, ${Math.round(r.evidence.focus * 100)}% focus)`;
+          ul.appendChild(li);
+        });
+        triageLabels = data.labels || [];
+        document.getElementById('triage-labels').textContent = 'Labels: ' + triageLabels.concat(['triage/lore-suggested']).join(', ');
+        triageComment.value = data.comment || '';
+      } catch (err) {
+        showToast('Routing failed: ' + err.message);
       } finally {
-        approveBtn.disabled = false;
+        triageRouteBtn.disabled = false;
       }
     });
+
+    triageApproveBtn.addEventListener('click', async () => {
+      triageApproveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issue_number: Number(triageSelect.value), comment: triageComment.value, labels: triageLabels })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+        const out = document.getElementById('triage-posted');
+        out.innerHTML = '';
+        const a = document.createElement('a');
+        a.href = data.comment_url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Posted on GitHub: ' + data.comment_url;
+        out.appendChild(a);
+        showToast('Approved and posted to GitHub.');
+      } catch (err) {
+        showToast('Approve failed: ' + err.message);
+      } finally {
+        triageApproveBtn.disabled = false;
+      }
+    });
+
+    loadDemoIssues();
 
     function showToast(msg) {
       toastMsg.textContent = msg;

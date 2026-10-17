@@ -172,3 +172,27 @@ async def approve_issue(req: ApproveIssueRequest):
                 content={"ok": False, "error": "Comment posted but labelling failed: " + _gh_error(l_resp)},
             )
     return {"ok": True, "comment_url": c_resp.json()["html_url"]}
+
+
+@demo_router.get("/route-issue/{issue_number}")
+async def route_demo_issue(issue_number: int):
+    """Lore's suggestion (team, label, reviewers, draft comment) for a practice-repo issue. Nothing is posted."""
+    try:
+        repo, token = _demo_config()
+    except ValueError as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(f"{GITHUB_API}/repos/{repo}/issues/{issue_number}", headers=_headers(token))
+    if resp.status_code != 200:
+        return JSONResponse(status_code=502, content={"ok": False, "error": _gh_error(resp)})
+    issue = resp.json()
+    try:
+        import asyncio
+        from app import graph_tools
+        allowed = sorted("sig-" + label.split("/", 1)[1] for label in ALLOWED_LABELS)
+        suggestion = await asyncio.to_thread(
+            graph_tools.route_issue, graph_tools.get_graph(), issue["title"], issue.get("body") or "", allowed)
+    except Exception as e:
+        return JSONResponse(status_code=503, content={"ok": False, "error": f"Graph unavailable: {e}"})
+    return {"ok": True, "issue": {"number": issue["number"], "title": issue["title"], "url": issue["html_url"]},
+            **suggestion, "labels": [suggestion["label"]] if suggestion.get("label") else []}
