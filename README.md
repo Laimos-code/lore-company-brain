@@ -146,6 +146,8 @@ To host Lore on a small cloud server (DigitalOcean, AWS EC2, Hetzner, or GitHub 
 | `POST` | `/api/ask` | Queries Lore brain with 60-second timeout guard and 20 req/min rate limit per IP. |
 | `POST` | `/api/actions/approve` | Approves an issue routing triage, draft comment, or decision ping. |
 | `GET` | `/api/actions/history` | Lists approved action history. |
+| `GET` | `/api/demo-issues` | Lists open issues in the practice repo (`DEMO_REPO`). |
+| `POST` | `/api/approve` | Human-approved triage: posts the comment and adds allowed `sig/*` labels plus `triage/lore-suggested`. |
 
 See [`docs/tool_contract.md`](docs/tool_contract.md) for full JSON request and response payloads.
 

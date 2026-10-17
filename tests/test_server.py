@@ -80,3 +80,22 @@ def test_action_approve_endpoint():
     data = response.json()
     assert data["status"] == "approved"
     assert data["action_id"] == "test_act_001"
+
+
+def test_demo_approve_refuses_kubernetes_repo(monkeypatch):
+    """Approve must never act on a kubernetes/ repo."""
+    monkeypatch.setenv("DEMO_REPO", "kubernetes/kubernetes")
+    monkeypatch.setenv("DEMO_GITHUB_TOKEN", "dummy")
+    resp = client.post("/api/approve", json={"issue_number": 1, "comment": "hi", "labels": ["sig/node"]})
+    assert resp.json()["ok"] is False
+    assert "kubernetes" in resp.json()["error"]
+
+
+def test_demo_approve_rejects_bad_label_and_long_comment(monkeypatch):
+    """Only allow-listed labels and comments up to 2000 chars."""
+    monkeypatch.setenv("DEMO_REPO", "someone/lore-demo-issues")
+    monkeypatch.setenv("DEMO_GITHUB_TOKEN", "dummy")
+    bad_label = client.post("/api/approve", json={"issue_number": 1, "comment": "hi", "labels": ["lgtm"]})
+    assert bad_label.status_code == 400 and bad_label.json()["ok"] is False
+    too_long = client.post("/api/approve", json={"issue_number": 1, "comment": "x" * 2001, "labels": []})
+    assert too_long.status_code == 400 and too_long.json()["ok"] is False

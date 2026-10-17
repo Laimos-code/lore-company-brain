@@ -5,6 +5,7 @@ Endpoints:
 - POST /api/ask     -> Queries AI agent (or stub) with timeout & 20 req/min rate limit
 - GET  /api/health  -> Returns {"ok": true, "falkordb": true/false} via RETURN 1
 - /api/actions      -> Router from app/actions.py (Approve button action)
+- GET  /api/demo-issues, POST /api/approve -> GitHub demo triage (app/actions.py)
 """
 import asyncio
 from collections import defaultdict
@@ -53,6 +54,7 @@ app.add_middleware(
 try:
     from app import actions
     app.include_router(actions.router)
+    app.include_router(actions.demo_router)
 except ImportError:
     # Graceful fallback if actions is being worked on
     from fastapi import APIRouter
