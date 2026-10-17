@@ -10,11 +10,6 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Python packaging
-*.egg-info/
-dist/
-build/
-
 # Virtual environments
 .venv/
 env/
