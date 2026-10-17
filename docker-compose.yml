@@ -1,11 +1,47 @@
 services:
+  # FalkorDB Graph Database Service
   falkordb:
     image: falkordb/falkordb:latest
-    ports:
-      - "6379:6379"   # Redis-compatible API (Python client connects here)
-      - "3000:3000"   # Browser UI at http://localhost:3000
+    container_name: lore-falkordb
+    restart: unless-stopped
     volumes:
-      - falkordb_data:/data   # graph is saved here, so it survives restarts
+      # Persistent volume ensuring graph data survives restarts
+      - falkordb_data:/data
+    # SECURITY REQUIREMENT:
+    # Ports 6379 & 3000 must NOT be exposed to the public internet.
+    # We bind them strictly to 127.0.0.1 on the host (data loading + Browser UI),
+    # while the app connects via the internal Docker network.
+    ports:
+      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:3000:3000"   # FalkorDB Browser UI at http://localhost:3000
+    networks:
+      - lore-net
+
+  # Lore FastAPI Server & Web UI
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lore-app
+    restart: unless-stopped
+    depends_on:
+      - falkordb
+    ports:
+      # Only the web application port is exposed to visitors
+      - "${PORT:-8000}:8000"
+    environment:
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+    networks:
+      - lore-net
 
 volumes:
   falkordb_data:
+    driver: local
+
+networks:
+  lore-net:
+    driver: bridge
