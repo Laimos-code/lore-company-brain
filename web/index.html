@@ -1,1130 +1,1005 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lore — Kubernetes Company Brain (FalkorDB)</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg: #090d16;
-      --card-bg: rgba(18, 25, 41, 0.75);
-      --card-border: rgba(255, 255, 255, 0.08);
-      --card-hover: rgba(255, 255, 255, 0.12);
-      --primary: #6366f1;
-      --primary-hover: #4f46e5;
-      --accent: #38bdf8;
-      --accent-glow: rgba(56, 189, 248, 0.25);
-      --success: #10b981;
-      --warning: #f59e0b;
-      --danger: #ef4444;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      --mono: 'JetBrains Mono', monospace;
-    }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lore</title>
+<meta name="description" content="Ask who owns what in Kubernetes, who actually does the work, and why decisions were made. Every answer links to its evidence.">
+<script>
+  /* Set the theme before the first paint, so the page never flashes the wrong colours. */
+  (function () {
+    var pref = "system";
+    try { pref = localStorage.getItem("lore-theme") || "system"; } catch (e) {}
+    var dark = pref === "dark" || (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    document.documentElement.dataset.themePref = pref;
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.1.11"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+<style type="text/tailwindcss">
+  @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+  @theme inline {
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --color-canvas: var(--canvas);
+    --color-surface: var(--surface);
+    --color-ink: var(--ink);
+    --color-ink-2: var(--ink-2);
+    --color-muted: var(--muted);
+    --color-line: var(--line);
+    --color-line-strong: var(--line-strong);
+    --color-tint: var(--tint);
+    --color-accent: var(--accent);
+    --color-accent-soft: var(--accent-soft);
+  }
+</style>
 
-    body {
-      background-color: var(--bg);
-      background-image: 
-        radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
-        radial-gradient(circle at 85% 80%, rgba(56, 189, 248, 0.12) 0%, transparent 40%);
-      color: var(--text);
-      font-family: var(--font);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      line-height: 1.6;
+<style>
+  /* ---------- Colour tokens ----------
+     Everything is grey except one muted slate-indigo accent. The accent has one job:
+     it marks people who do the work but are not official owners (Lore's main finding),
+     plus citation numbers and the send button. */
+  :root {
+    --canvas: #FAFAFA;
+    --surface: #FFFFFF;
+    --ink: #18181B;
+    --ink-2: #52525B;
+    --muted: #71717A;
+    --line: #E7E7EA;
+    --line-strong: #D4D4D8;
+    --tint: #F0F1F6;
+    --accent: #5161B6;
+    --accent-soft: #ECEEF9;
+    --shadow: 0 1px 2px rgba(24, 24, 27, 0.04), 0 6px 20px rgba(24, 24, 27, 0.05);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --canvas: #111214; --surface: #17181B; --ink: #EDEDF0; --ink-2: #B4B4BC; --muted: #8B8B95;
+      --line: #26272B; --line-strong: #34353A; --tint: #1F2130; --accent: #8F9BE6; --accent-soft: #1E2133;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+      color-scheme: dark;
     }
+  }
+  :root[data-theme="dark"] {
+    --canvas: #111214; --surface: #17181B; --ink: #EDEDF0; --ink-2: #B4B4BC; --muted: #8B8B95;
+    --line: #26272B; --line-strong: #34353A; --tint: #1F2130; --accent: #8F9BE6; --accent-soft: #1E2133;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+    color-scheme: dark;
+  }
 
-    header {
-      padding: 1.5rem 2rem;
-      border-bottom: 1px solid var(--card-border);
-      backdrop-filter: blur(12px);
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
+  html, body { margin: 0; background: var(--canvas); color: var(--ink); }
+  body {
+    font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  [hidden] { display: none !important; }
+  .num { font-variant-numeric: tabular-nums; }
+  :focus { outline: none; }
+  :focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; border-radius: 8px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  ::selection { background: var(--accent-soft); }
 
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 0.85rem;
-    }
+  /* The answer text */
+  .answer p { margin: 0 0 0.85em; }
+  .answer p:last-child, .answer ul:last-child { margin-bottom: 0; }
+  .answer ul { margin: 0 0 0.85em; padding-left: 1.15em; }
+  .answer li { margin: 0.2em 0; }
+  .answer strong { font-weight: 600; }
+  .answer code { font-size: 0.9em; background: var(--tint); padding: 0.1em 0.35em; border-radius: 5px; }
+  .answer sup { line-height: 0; }
+  .cite {
+    font-size: 11px; font-weight: 600; color: var(--accent); text-decoration: none;
+    padding: 0 2px; margin-left: 1px; border-radius: 4px; transition: background-color 150ms ease;
+  }
+  .cite:hover { background: var(--accent-soft); }
+  .caret { display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: -0.15em; background: var(--ink); opacity: 0.55; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
 
-    .logo-badge {
-      width: 42px;
-      height: 42px;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #6366f1, #38bdf8);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 800;
-      font-size: 1.4rem;
-      color: #fff;
-      box-shadow: 0 4px 16px var(--accent-glow);
-    }
+  /* Thinking: three soft dots */
+  .dots { display: inline-flex; gap: 5px; align-items: center; }
+  .dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: pulse 1.2s ease-in-out infinite; }
+  .dots span:nth-child(2) { animation-delay: 0.15s; }
+  .dots span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes pulse { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-1px); } }
 
-    .brand-title {
-      font-weight: 700;
-      font-size: 1.25rem;
-      letter-spacing: -0.02em;
-    }
+  /* New answer parts appear once, quietly */
+  .reveal { animation: reveal 200ms ease both; }
+  @keyframes reveal { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
 
-    .brand-subtitle {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
+  details > summary { list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] .chev { transform: rotate(90deg); }
 
-    .status-badges {
-      display: flex;
-      gap: 0.75rem;
-      align-items: center;
-    }
+  .map { height: 300px; }
+  @media (max-width: 640px) { .map { height: 240px; } }
 
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-      padding: 0.35rem 0.75rem;
-      border-radius: 9999px;
-      font-size: 0.75rem;
-      font-weight: 500;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--card-border);
-    }
+  textarea { resize: none; }
+  textarea:focus-visible { outline: none; }
+  #composer:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+    box-shadow: var(--shadow), 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent);
+  }
+  textarea::placeholder { color: var(--muted); opacity: 1; }
 
-    .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--text-dim);
-    }
-
-    .dot.live {
-      background: var(--success);
-      box-shadow: 0 0 8px var(--success);
-    }
-
-    .dot.offline {
-      background: var(--danger);
-    }
-
-    main {
-      flex: 1;
-      max-width: 1100px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 2.5rem 1.5rem;
-      display: flex;
-      flex-direction: column;
-      gap: 2rem;
-    }
-
-    .hero {
-      text-align: center;
-      margin-bottom: 0.5rem;
-    }
-
-    .hero h1 {
-      font-size: 2.6rem;
-      font-weight: 800;
-      letter-spacing: -0.03em;
-      margin-bottom: 0.6rem;
-      background: linear-gradient(180deg, #ffffff 30%, #94a3b8 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .hero p {
-      color: var(--text-muted);
-      font-size: 1.05rem;
-      max-width: 650px;
-      margin: 0 auto;
-    }
-
-    /* Search Box */
-    .search-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 18px;
-      padding: 1.25rem;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-      backdrop-filter: blur(16px);
-      transition: border-color 0.2s ease;
-    }
-
-    .search-card:focus-within {
-      border-color: var(--primary);
-    }
-
-    .search-row {
-      display: flex;
-      gap: 0.75rem;
-    }
-
-    .search-input {
-      flex: 1;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 12px;
-      padding: 0.95rem 1.25rem;
-      color: var(--text);
-      font-family: var(--font);
-      font-size: 1rem;
-      outline: none;
-      transition: all 0.2s ease;
-    }
-
-    .search-input:focus {
-      background: rgba(255, 255, 255, 0.08);
-      border-color: var(--accent);
-    }
-
-    .ask-btn {
-      background: linear-gradient(135deg, #6366f1, #4f46e5);
-      color: white;
-      border: none;
-      border-radius: 12px;
-      padding: 0 1.75rem;
-      font-weight: 600;
-      font-size: 0.95rem;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
-      transition: transform 0.1s ease, filter 0.2s ease;
-    }
-
-    .ask-btn:hover {
-      filter: brightness(1.1);
-    }
-
-    .ask-btn:active {
-      transform: scale(0.98);
-    }
-
-    /* Example questions pills */
-    .examples-wrapper {
-      margin-top: 1rem;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      align-items: center;
-    }
-
-    .examples-label {
-      font-size: 0.8rem;
-      color: var(--text-dim);
-      font-weight: 500;
-    }
-
-    .example-pill {
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--card-border);
-      border-radius: 9999px;
-      padding: 0.35rem 0.85rem;
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      cursor: pointer;
-      transition: all 0.2s ease;
-    }
-
-    .example-pill:hover {
-      background: rgba(99, 102, 241, 0.15);
-      border-color: var(--primary);
-      color: var(--text);
-      transform: translateY(-1px);
-    }
-
-    /* Results Section */
-    .results-container {
-      display: none;
-      flex-direction: column;
-      gap: 1.5rem;
-      animation: fadeIn 0.3s ease;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    .answer-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 18px;
-      padding: 1.75rem;
-      backdrop-filter: blur(16px);
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-    }
-
-    .answer-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1rem;
-      padding-bottom: 0.75rem;
-      border-bottom: 1px solid var(--card-border);
-    }
-
-    .answer-title {
-      font-weight: 700;
-      font-size: 1.15rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .stub-tag {
-      font-size: 0.7rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      background: rgba(245, 158, 11, 0.15);
-      color: var(--warning);
-      padding: 0.2rem 0.6rem;
-      border-radius: 6px;
-      border: 1px solid rgba(245, 158, 11, 0.3);
-    }
-
-    .answer-body {
-      font-size: 1.05rem;
-      color: #e2e8f0;
-      line-height: 1.7;
-      margin-bottom: 1.5rem;
-    }
-
-    /* Comparison Grid: Owns vs Knows */
-    .comparison-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1.25rem;
-      margin-top: 1.5rem;
-    }
-
-    @media (max-width: 768px) {
-      .comparison-grid {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .sub-card {
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid var(--card-border);
-      border-radius: 14px;
-      padding: 1.25rem;
-    }
-
-    .sub-card-title {
-      font-size: 0.9rem;
-      font-weight: 600;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-      margin-bottom: 0.75rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .title-owns { color: var(--accent); }
-    .title-knows { color: var(--success); }
-
-    .person-list {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-    }
-
-    .person-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0.5rem 0.75rem;
-      background: rgba(255, 255, 255, 0.02);
-      border-radius: 8px;
-      font-size: 0.9rem;
-    }
-
-    .person-name {
-      font-family: var(--mono);
-      font-weight: 500;
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-
-    .person-role {
-      font-size: 0.75rem;
-      color: var(--text-dim);
-    }
-
-    .hidden-knower-badge {
-      background: rgba(16, 185, 129, 0.15);
-      color: var(--success);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      font-size: 0.65rem;
-      padding: 0.15rem 0.4rem;
-      border-radius: 4px;
-      font-family: var(--font);
-    }
-
-    /* Decision Trail Timeline */
-    .timeline-card {
-      margin-top: 1rem;
-      padding: 1.25rem;
-      background: rgba(0, 0, 0, 0.2);
-      border-radius: 14px;
-      border: 1px solid var(--card-border);
-    }
-
-    .timeline-title {
-      font-size: 0.9rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      color: var(--primary);
-      margin-bottom: 0.75rem;
-    }
-
-    .timeline-steps {
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-      position: relative;
-      padding-left: 1.5rem;
-    }
-
-    .timeline-steps::before {
-      content: '';
-      position: absolute;
-      left: 6px;
-      top: 6px;
-      bottom: 6px;
-      width: 2px;
-      background: rgba(255, 255, 255, 0.1);
-    }
-
-    .timeline-step {
-      position: relative;
-      font-size: 0.9rem;
-    }
-
-    .timeline-step::before {
-      content: '';
-      position: absolute;
-      left: -1.5rem;
-      top: 6px;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 6px var(--accent);
-    }
-
-    /* Evidence Graph Map */
-    .evidence-map-card {
-      margin-top: 1.25rem;
-      padding: 1.25rem;
-      background: rgba(0, 0, 0, 0.25);
-      border-radius: 14px;
-      border: 1px solid var(--card-border);
-    }
-
-    .evidence-map-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 0.75rem;
-    }
-
-    .evidence-map-title {
-      font-size: 0.9rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      color: #38bdf8;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    #evidence-graph-container {
-      width: 100%;
-      height: 380px;
-      background: radial-gradient(circle at center, rgba(30, 41, 59, 0.5) 0%, rgba(15, 23, 42, 0.9) 100%);
-      border-radius: 10px;
-      border: 1px solid var(--card-border);
-      position: relative;
-      overflow: hidden;
-    }
-
-    /* Sources and Action Row */
-    .bottom-bar {
-      margin-top: 1.5rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 1rem;
-      padding-top: 1rem;
-      border-top: 1px solid var(--card-border);
-    }
-
-    .sources-list {
-      display: flex;
-      gap: 0.5rem;
-      flex-wrap: wrap;
-    }
-
-    .source-tag {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--card-border);
-      border-radius: 6px;
-      padding: 0.25rem 0.5rem;
-      font-size: 0.75rem;
-      font-family: var(--mono);
-      color: var(--text-muted);
-    }
-
-    .approve-action-btn {
-      background: linear-gradient(135deg, #10b981, #059669);
-      color: white;
-      border: none;
-      border-radius: 10px;
-      padding: 0.65rem 1.25rem;
-      font-weight: 600;
-      font-size: 0.85rem;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
-      transition: all 0.2s ease;
-    }
-
-    .approve-action-btn:hover {
-      filter: brightness(1.15);
-      transform: translateY(-1px);
-    }
-
-    /* Toast Notification */
-    #toast {
-      position: fixed;
-      bottom: 2rem;
-      right: 2rem;
-      background: #1e293b;
-      color: white;
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      padding: 1rem 1.5rem;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-      display: none;
-      align-items: center;
-      gap: 0.75rem;
-      z-index: 100;
-      animation: slideIn 0.3s ease;
-    }
-
-    @keyframes slideIn {
-      from { transform: translateX(100%); opacity: 0; }
-      to { transform: translateX(0); opacity: 1; }
-    }
-
-    footer {
-      text-align: center;
-      padding: 2rem;
-      color: var(--text-dim);
-      font-size: 0.85rem;
-      border-top: 1px solid var(--card-border);
-    }
-  </style>
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
 </head>
-<body>
 
-  <header>
-    <div class="brand">
-      <div class="logo-badge">L</div>
-      <div>
-        <div class="brand-title">Lore</div>
-        <div class="brand-subtitle">Company Brain on FalkorDB Graph</div>
+<body class="bg-canvas text-ink">
+
+<!-- Top bar -->
+<header id="topbar" class="sticky top-0 z-30 bg-canvas border-b border-transparent transition-colors duration-200">
+  <div class="mx-auto flex h-14 max-w-[960px] items-center justify-between px-4 sm:px-6">
+    <a href="./" class="flex items-center gap-2 rounded-lg py-1 text-[15px] font-semibold tracking-[-0.01em] text-ink no-underline" aria-label="Lore, start over">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M4.5 14.5 10 5l5.5 9.5H4.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" opacity="0.35"/>
+        <circle cx="10" cy="5" r="2.3" fill="currentColor"/>
+        <circle cx="4.5" cy="14.5" r="2.3" fill="currentColor"/>
+        <circle cx="15.5" cy="14.5" r="2.3" fill="var(--accent)"/>
+      </svg>
+      Lore
+    </a>
+    <div class="flex items-center gap-1.5">
+      <button id="newChat" type="button" class="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-ink-2 transition-colors duration-150 hover:bg-line/60 hover:text-ink">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        New chat
+      </button>
+      <div class="relative">
+        <button id="settingsBtn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="settingsMenu"
+                class="grid h-8 w-8 place-items-center rounded-full text-ink-2 transition-colors duration-150 hover:bg-line/60 hover:text-ink" title="Settings">
+          <span class="sr-only">Settings</span>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2.5 5h6M11.5 5h2M2.5 11h2M7.5 11h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <circle cx="10" cy="5" r="1.6" stroke="currentColor" stroke-width="1.4"/>
+            <circle cx="6" cy="11" r="1.6" stroke="currentColor" stroke-width="1.4"/>
+          </svg>
+        </button>
+        <div id="settingsMenu" hidden class="absolute right-0 top-10 z-40 w-[260px] rounded-[12px] border border-line bg-surface p-3 shadow-[var(--shadow)]">
+          <p class="mb-2 text-[12.5px] text-muted">Theme</p>
+          <div class="grid grid-cols-3 gap-1 rounded-[9px] bg-tint p-1" role="radiogroup" aria-label="Theme">
+            <button type="button" role="radio" data-theme-choice="system" class="theme-choice h-7 rounded-[7px] text-[12.5px] text-ink-2 transition-colors duration-150">System</button>
+            <button type="button" role="radio" data-theme-choice="light" class="theme-choice h-7 rounded-[7px] text-[12.5px] text-ink-2 transition-colors duration-150">Light</button>
+            <button type="button" role="radio" data-theme-choice="dark" class="theme-choice h-7 rounded-[7px] text-[12.5px] text-ink-2 transition-colors duration-150">Dark</button>
+          </div>
+          <div class="mt-3 flex items-start justify-between gap-3 border-t border-line pt-3">
+            <div>
+              <p id="exLabel" class="text-[13px] text-ink">Example answers</p>
+              <p class="text-[12px] leading-snug text-muted">Use saved answers instead of the live agent.</p>
+            </div>
+            <button id="exToggle" type="button" role="switch" aria-checked="false" aria-labelledby="exLabel"
+                    class="relative mt-0.5 h-5 w-9 shrink-0 rounded-full bg-line-strong transition-colors duration-150">
+              <span class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-surface shadow-sm transition-transform duration-150"></span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
-    <div class="status-badges">
-      <div class="badge">
-        <span class="dot live" id="server-dot"></span>
-        <span id="server-status">Server: Online</span>
-      </div>
-      <div class="badge">
-        <span class="dot" id="falkor-dot"></span>
-        <span id="falkor-status">FalkorDB: Checking...</span>
-      </div>
-    </div>
-  </header>
+  </div>
+</header>
 
-  <main>
-    <section class="hero">
-      <h1>The Real Org Chart of Kubernetes</h1>
-      <p>Lore maps who officially owns an area vs who actually does the work, traces 8 years of design decisions to their source, and routes issues to the right people.</p>
-    </section>
+<main id="main" class="mx-auto max-w-[720px] px-4 sm:px-6" style="padding-bottom: calc(var(--composer-h, 140px) + 32px);">
+  <!-- Empty state -->
+  <section id="empty" class="pt-[12vh] sm:pt-[16vh]">
+    <h1 class="text-[26px] font-semibold leading-[1.2] tracking-[-0.022em] text-ink sm:text-[28px]">Who knows what in Kubernetes?</h1>
+    <p class="mt-2.5 max-w-[56ch] text-[15px] leading-relaxed text-muted">Ask about a team, a design decision or a code folder. Lore checks who officially owns it, who actually does the work, and why it was decided.</p>
+    <div id="suggestions" class="mt-8 grid grid-cols-1 gap-2.5 sm:grid-cols-2"></div>
+  </section>
 
-    <section class="search-card">
-      <div class="search-row">
-        <input 
-          type="text" 
-          id="question-input" 
-          class="search-input" 
-          placeholder="Ask Lore (e.g. 'Who actually knows SIG Node?' or 'Why gang scheduling?')"
-          value="Who actually knows SIG Node?"
-        />
-        <button id="ask-btn" class="ask-btn">
-          <span>Ask Lore</span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+  <!-- Conversation -->
+  <div id="thread" role="log" aria-label="Conversation" class="flex flex-col gap-9 pt-8"></div>
+  <p id="live" class="sr-only" aria-live="polite"></p>
+</main>
+
+<!-- Composer -->
+<div id="composerWrap" class="fixed inset-x-0 bottom-0 z-20">
+  <div class="pointer-events-none h-8" style="background: linear-gradient(to top, var(--canvas), transparent);"></div>
+  <div class="bg-canvas px-4 pb-[max(16px,env(safe-area-inset-bottom))] sm:px-6">
+    <form id="composer" class="relative mx-auto max-w-[720px] rounded-[14px] border border-line bg-surface shadow-[var(--shadow)] transition-colors duration-150 focus-within:border-line-strong" autocomplete="off">
+      <label for="q" class="sr-only">Ask Lore</label>
+      <textarea id="q" rows="1" placeholder="Ask about a team, a design decision or a code folder"
+                class="block max-h-[200px] w-full bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-relaxed text-ink"></textarea>
+      <div class="flex items-center justify-between px-2.5 pb-2.5 pt-1">
+        <div class="relative">
+          <button id="toolsBtn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="toolsMenu" title="More ways to ask"
+                  class="grid h-8 w-8 place-items-center rounded-full text-muted transition-colors duration-150 hover:bg-line/60 hover:text-ink">
+            <span class="sr-only">More ways to ask</span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          <div id="toolsMenu" hidden class="absolute bottom-10 left-0 z-40 w-[280px] rounded-[12px] border border-line bg-surface p-1.5 shadow-[var(--shadow)]">
+            <button type="button" data-fill='Where should this new issue go? "' class="tool-item block w-full rounded-[8px] px-3 py-2 text-left transition-colors duration-150 hover:bg-tint">
+              <span class="block text-[13.5px] text-ink">Triage a new issue</span>
+              <span class="block text-[12px] text-muted">Paste a title; Lore finds the team and reviewers.</span>
+            </button>
+            <button type="button" data-fill="Who knew SIG Storage best as of 2026-03-01?" class="tool-item block w-full rounded-[8px] px-3 py-2 text-left transition-colors duration-150 hover:bg-tint">
+              <span class="block text-[13.5px] text-ink">Look back in time</span>
+              <span class="block text-[12px] text-muted">Count only evidence from before a date.</span>
+            </button>
+            <button type="button" data-fill="Who owns pkg/scheduler/framework, and who really reviews it?" class="tool-item block w-full rounded-[8px] px-3 py-2 text-left transition-colors duration-150 hover:bg-tint">
+              <span class="block text-[13.5px] text-ink">Ask about a code folder</span>
+              <span class="block text-[12px] text-muted">Compare its OWNERS file with real reviewers.</span>
+            </button>
+          </div>
+        </div>
+        <button id="send" type="submit" disabled
+                class="grid h-8 w-8 place-items-center rounded-full bg-accent text-white transition-[background-color,opacity] duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:bg-line-strong disabled:text-surface disabled:hover:opacity-100 dark:text-[#111214]">
+          <span class="sr-only">Send</span>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 13V3.5M3.75 7.5 8 3.25l4.25 4.25" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
-
-      <div class="examples-wrapper">
-        <span class="examples-label">Try asking:</span>
-        <button class="example-pill" data-q="Who actually knows SIG Node?">Who actually knows SIG Node?</button>
-        <button class="example-pill" data-q="Why did they choose gang scheduling?">Why did they choose gang scheduling?</button>
-        <button class="example-pill" data-q="Who to ask about DisableCloudProviders?">Who to ask about DisableCloudProviders?</button>
-        <button class="example-pill" data-q="What decisions are stuck at alpha?">What decisions are stuck at alpha?</button>
-      </div>
-    </section>
-
-    <!-- Results Panel -->
-    <section id="results" class="results-container">
-      <div class="answer-card">
-        <div class="answer-header">
-          <div class="answer-title">
-            <span>Graph Synthesis</span>
-          </div>
-          <div id="stub-indicator" class="stub-tag" style="display: none;">Verified Stub Mode</div>
-        </div>
-
-        <div id="answer-text" class="answer-body"></div>
-
-        <!-- Org Chart Comparison: Owns vs Knows -->
-        <div class="comparison-grid" id="comparison-view">
-          <div class="sub-card">
-            <div class="sub-card-title title-owns">
-              <span>Official Owners</span>
-              <span style="font-size: 0.75rem; opacity: 0.8;">(From sigs.yaml)</span>
-            </div>
-            <ul class="person-list" id="owners-list"></ul>
-          </div>
-
-          <div class="sub-card">
-            <div class="sub-card-title title-knows">
-              <span>Actual Knowers</span>
-              <span style="font-size: 0.75rem; opacity: 0.8;">(Evidence in KEPs & Work)</span>
-            </div>
-            <ul class="person-list" id="knowers-list"></ul>
-          </div>
-        </div>
-
-        <!-- Evidence Map (Graph Visualization) -->
-        <div class="evidence-map-card" id="evidence-map-view" style="display: none;">
-          <div class="evidence-map-header">
-            <div class="evidence-map-title">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-              <span>Evidence Graph Map</span>
-            </div>
-            <span id="evidence-stats" style="font-size: 0.75rem; color: var(--text-dim); font-family: var(--mono);"></span>
-          </div>
-          <div id="evidence-graph-container">
-            <svg id="evidence-svg" style="width: 100%; height: 100%;"></svg>
-          </div>
-        </div>
-
-        <!-- Decision Trail Timeline (if present) -->
-        <div class="timeline-card" id="timeline-view" style="display: none;">
-          <div class="timeline-title">Decision Trail & Replacements Lineage</div>
-          <div class="timeline-steps" id="timeline-steps"></div>
-        </div>
-
-        <!-- Evidence and Action Footer -->
-        <div class="bottom-bar">
-          <div class="sources-list" id="sources-container"></div>
-          <button id="approve-action-btn" class="approve-action-btn">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-            <span>Approve & Route Issue (Action C)</span>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <!-- Live Triage: Lore suggests, a human approves, GitHub gets the comment -->
-    <section id="triage" class="search-card" style="margin-top: 1.5rem;">
-      <div class="answer-title" style="margin-bottom: 0.75rem;"><span>Live Triage (human-approved GitHub action)</span></div>
-      <div class="search-row">
-        <select id="triage-issue" class="search-input"><option>Loading practice issues...</option></select>
-        <button id="triage-route-btn" class="ask-btn"><span>Route with Lore</span></button>
-      </div>
-      <div id="triage-result" style="display:none; margin-top: 1rem;">
-        <div id="triage-summary" class="answer-body"></div>
-        <ul id="triage-reviewers" class="person-list"></ul>
-        <textarea id="triage-comment" class="search-input" rows="9" maxlength="2000" style="width:100%; margin-top:0.75rem; font-family:inherit;"></textarea>
-        <div class="bottom-bar">
-          <span id="triage-labels" class="sources-list"></span>
-          <button id="triage-approve-btn" class="approve-action-btn"><span>Approve &amp; post to GitHub</span></button>
-        </div>
-        <div id="triage-posted" class="answer-body" style="margin-top:0.5rem;"></div>
-      </div>
-    </section>
-  </main>
-
-  <div id="toast">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-    <span id="toast-msg">Action approved successfully.</span>
+    </form>
+    <p class="mx-auto mt-2 max-w-[720px] text-center text-[12px] text-muted">Lore answers from public Kubernetes data and links every claim to its source.</p>
   </div>
+</div>
 
-  <footer>
-    Lore Company Brain &bull; Built with FastAPI, FalkorDB, and Kubernetes Open Source Data &bull; WeMakeDevs &times; FalkorDB Graph Hacks
-  </footer>
+<script>
+/* =====================================================================
+   Lore web page.
+   Sends a question to POST /api/ask and shows the reply (format in
+   docs/tool_contract.md):
+     { question, answer, steps[{tool, input, summary}],
+       evidence{nodes[{id, label, type, official?, score?, status?}],
+                edges[{source, target, label}]},
+       sources[{n, title, url}], is_stub,
+       draft?: {comment, label} }          <- optional, from route_issue
+   If the agent can't be reached, or "Example answers" is on, or the
+   address has ?examples, the page uses saved example answers built
+   from real tool output, and labels them as examples.
+   ?demo (or opening the file directly) preloads a short conversation.
+   ===================================================================== */
 
-  <script>
-    const questionInput = document.getElementById('question-input');
-    const askBtn = document.getElementById('ask-btn');
-    const resultsContainer = document.getElementById('results');
-    const answerText = document.getElementById('answer-text');
-    const stubIndicator = document.getElementById('stub-indicator');
-    const ownersList = document.getElementById('owners-list');
-    const knowersList = document.getElementById('knowers-list');
-    const timelineView = document.getElementById('timeline-view');
-    const timelineSteps = document.getElementById('timeline-steps');
-    const sourcesContainer = document.getElementById('sources-container');
-    const approveBtn = document.getElementById('approve-action-btn');
-    const falkorDot = document.getElementById('falkor-dot');
-    const falkorStatus = document.getElementById('falkor-status');
-    const toast = document.getElementById('toast');
-    const toastMsg = document.getElementById('toast-msg');
+const SUGGESTIONS = [
+  { q: "Who actually knows SIG Node?", hint: "Official leaders against the people doing the work" },
+  { q: "Why did Kubernetes choose gang scheduling?", hint: "A decision trail back to 2018" },
+  { q: "Which design decisions look stuck?", hint: "No progress in eight or more releases" },
+  { q: 'Where should this new issue go? "Pods in my training job start one by one instead of all at once"', label: "Where should a new scheduling issue go?", hint: "The right team, reviewers and a draft reply" }
+];
 
-    let currentResponseData = null;
+const TOOL_NAMES = {
+  who_owns: "Checked the official owners",
+  who_knows: "Ranked who does the work",
+  why: "Traced the decision history",
+  whats_stale: "Looked for stuck decisions",
+  route_issue: "Matched the issue to a team"
+};
 
-    // Check health on startup
-    async function checkHealth() {
-      try {
-        const res = await fetch('/api/health');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.falkordb) {
-            falkorDot.className = 'dot live';
-            falkorStatus.textContent = 'FalkorDB: Connected';
-          } else {
-            falkorDot.className = 'dot';
-            falkorDot.style.background = '#f59e0b';
-            falkorStatus.textContent = 'FalkorDB: Standby';
-          }
-        }
-      } catch (e) {
-        falkorDot.className = 'dot offline';
-        falkorStatus.textContent = 'FalkorDB: Offline';
-      }
-    }
-    checkHealth();
+const TYPE_NAMES = {
+  Team: "Team", KEP: "Design decision", PR: "Pull request", Issue: "Issue",
+  Folder: "Code folder", FeatureGate: "Feature switch", Release: "Release", Component: "Component"
+};
 
-    // Ask query function
-    async function submitQuestion(question) {
-      if (!question || !question.trim()) return;
+/* ---------- helpers ---------- */
+const $ = (id) => document.getElementById(id);
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-      askBtn.disabled = true;
-      askBtn.querySelector('span').textContent = 'Thinking...';
+function escapeHtml(text) {
+  return String(text ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function safeUrl(url) {
+  return /^https?:\/\//i.test(String(url || "")) ? String(url) : null;
+}
+function edgeText(label) {
+  return String(label || "").replace(/_/g, " ").toLowerCase();
+}
+function storageGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+function storageSet(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
 
-      try {
-        const res = await fetch('/api/ask', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: question.trim() })
-        });
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({ error: 'Request failed' }));
-          alert('Error (' + res.status + '): ' + (errData.error || errData.detail || 'Unknown error'));
-          return;
-        }
-
-        const data = await res.json();
-        currentResponseData = data;
-        renderResults(data);
-      } catch (err) {
-        alert('Connection error: ' + err.message);
-      } finally {
-        askBtn.disabled = false;
-        askBtn.querySelector('span').textContent = 'Ask Lore';
-      }
-    }
-
-    function renderResults(data) {
-      resultsContainer.style.display = 'flex';
-      answerText.textContent = data.answer || 'No direct answer returned.';
-
-      stubIndicator.style.display = data.is_stub ? 'inline-block' : 'none';
-
-      // Names, titles and roles come from the graph, so rows are built with textContent, never as HTML.
-      function el(tag, className, text) {
-        const node = document.createElement(tag);
-        if (className) node.className = className;
-        if (text !== undefined) node.textContent = text;
-        return node;
-      }
-
-      // Render Owners
-      ownersList.innerHTML = '';
-      if (data.official_owners && data.official_owners.length) {
-        data.official_owners.forEach(o => {
-          const li = el('li', 'person-row');
-          li.append(el('span', 'person-name', '@' + o.login), el('span', 'person-role', o.role || 'official lead'));
-          ownersList.appendChild(li);
-        });
-
-      } else {
-        const li = document.createElement('li');
-        li.className = 'person-row';
-        li.style.color = 'var(--text-dim)';
-        li.textContent = 'No official leaders listed.';
-        ownersList.appendChild(li);
-      }
-
-      // Render Knowers safely
-      knowersList.innerHTML = '';
-      if (data.actual_knowers && data.actual_knowers.length) {
-        data.actual_knowers.forEach(k => {
-          const li = el('li', 'person-row');
-          const name = el('span', 'person-name', '@' + k.login + ' ');
-          const badge = k.is_official ? el('span', null, 'Official') : el('span', 'hidden-knower-badge', 'Not on Org Chart');
-          if (k.is_official) badge.style.cssText = 'font-size:0.75rem; color:var(--text-dim)';
-          name.appendChild(badge);
-          // decisions_count = KEP decisions plus PR work (authored / reviewed / lgtm / approved)
-          li.append(name, el('span', 'person-role', k.decisions_count ? k.decisions_count + ' decisions & PRs' : 'expert'));
-          knowersList.appendChild(li);
-        });
-      } else {
-        const li = document.createElement('li');
-        li.className = 'person-row';
-        li.style.color = 'var(--text-dim)';
-        li.textContent = 'No decision evidence recorded.';
-        knowersList.appendChild(li);
-      }
-
-      // Decision Trail Timeline safely
-      if (data.decision_trail && data.decision_trail.length) {
-        timelineView.style.display = 'block';
-        timelineSteps.innerHTML = '';
-        data.decision_trail.forEach(d => {
-          const div = el('div', 'timeline-step');
-          const meta = el('span', null, `${d.date} [${d.status}]`);
-          meta.style.cssText = 'color:var(--text-muted); font-size:0.8rem;';
-          div.append(el('strong', null, `${d.kep} (${d.title})`), ' • ', meta);
-          timelineSteps.appendChild(div);
-        });
-
-      } else {
-        timelineView.style.display = 'none';
-      }
-
-      // Sources safely with links and [n] prefix
-      sourcesContainer.innerHTML = '';
-      if (data.sources && data.sources.length) {
-        data.sources.forEach(s => {
-          const tag = s.url ? document.createElement('a') : document.createElement('span');
-          tag.className = 'source-tag';
-          if (s.url) {
-            tag.href = s.url;
-            tag.target = '_blank';
-            tag.rel = 'noopener noreferrer';
-            tag.style.textDecoration = 'none';
-          }
-          const numPrefix = s.n != null ? `[${s.n}] ` : '';
-          const typeRef = s.type && s.ref ? `${s.type}: ${s.ref}` : (s.ref || s.title || 'Source');
-          tag.textContent = `${numPrefix}${typeRef} (${s.title})`;
-          sourcesContainer.appendChild(tag);
-        });
-      }
-
-      // Render Evidence Graph Map
-      if (data.evidence && data.evidence.nodes && data.evidence.nodes.length) {
-        renderEvidenceMap(data.evidence);
-      } else if (data.graph && data.graph.nodes && data.graph.nodes.length) {
-        renderEvidenceMap(data.graph);
-      } else {
-        const evView = document.getElementById('evidence-map-view');
-        if (evView) evView.style.display = 'none';
-      }
-    }
-
-    function renderEvidenceMap(evidence) {
-      const evView = document.getElementById('evidence-map-view');
-      const stats = document.getElementById('evidence-stats');
-      const svg = document.getElementById('evidence-svg');
-      const container = document.getElementById('evidence-graph-container');
-
-      if (!evidence || !evidence.nodes || !evidence.nodes.length) {
-        if (evView) evView.style.display = 'none';
-        return;
-      }
-
-      evView.style.display = 'block';
-      if (stats) stats.textContent = `${evidence.nodes.length} nodes · ${evidence.edges ? evidence.edges.length : 0} edges`;
-
-      const width = container.clientWidth || 800;
-      const height = container.clientHeight || 380;
-      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-      svg.innerHTML = '';
-
-      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-      defs.innerHTML = `
-        <marker id="arrow" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" />
-        </marker>
-        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="3" result="blur" />
-          <feComposite in="SourceGraphic" in2="blur" operator="over" />
-        </filter>
-      `;
-      svg.appendChild(defs);
-
-      const typeColors = {
-        'Team': { fill: '#6366f1', stroke: '#818cf8', text: '#e0e7ff' },
-        'Person': { fill: '#10b981', stroke: '#34d399', text: '#d1fae5' },
-        'KEP': { fill: '#f59e0b', stroke: '#fbbf24', text: '#fef3c7' },
-        'FeatureGate': { fill: '#a855f7', stroke: '#c084fc', text: '#f3e8ff' },
-        'Folder': { fill: '#f43f5e', stroke: '#fb7185', text: '#ffe4e6' },
-        'PR': { fill: '#38bdf8', stroke: '#7dd3fc', text: '#e0f2fe' }
-      };
-
-      const nodes = evidence.nodes;
-      const edges = evidence.edges || [];
-      const nodeMap = {};
-      const centerX = width / 2;
-      const centerY = height / 2;
-      const radius = Math.min(width, height) * 0.38;
-
-      nodes.forEach((n, idx) => {
-        const angle = (idx / nodes.length) * 2 * Math.PI;
-        let r = radius;
-        if (n.type === 'Team') r = radius * 0.35;
-        else if (n.type === 'Person') r = radius * 0.75;
-
-        nodeMap[n.id] = {
-          ...n,
-          x: centerX + r * Math.cos(angle) + (Math.random() - 0.5) * 15,
-          y: centerY + r * Math.sin(angle) + (Math.random() - 0.5) * 15,
-        };
+/* Escape the answer, then add a small, safe subset of formatting:
+   paragraphs, "- " lists, **bold**, `code`, and [n] citations linked to sources. */
+function formatAnswer(text, sources) {
+  const byN = new Map((sources || []).map((s) => [String(s.n), s]));
+  const inline = (s) => s
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\s*\[(\d+(?:\s*,\s*\d+)*)\]/g, (match, group) => {
+      const links = group.split(/\s*,\s*/).map((n) => {
+        const src = byN.get(n);
+        const url = src && safeUrl(src.url);
+        return url ? `<a class="cite" href="${escapeHtml(url)}" target="_blank" rel="noopener" title="${escapeHtml(src.title || url)}">${n}</a>` : null;
       });
+      return links.every(Boolean) ? `<sup>${links.join("")}</sup>` : match;
+    });
+  return escapeHtml(text).split(/\n{2,}/).map((block) => {
+    const lines = block.split("\n").filter((l) => l.trim());
+    if (lines.length && lines.every((l) => /^\s*[-*]\s+/.test(l))) {
+      return `<ul>${lines.map((l) => `<li>${inline(l.replace(/^\s*[-*]\s+/, ""))}</li>`).join("")}</ul>`;
+    }
+    return `<p>${inline(lines.join("<br>"))}</p>`;
+  }).join("");
+}
 
-      for (let iter = 0; iter < 25; iter++) {
-        for (let i = 0; i < nodes.length; i++) {
-          for (let j = i + 1; j < nodes.length; j++) {
-            const n1 = nodeMap[nodes[i].id];
-            const n2 = nodeMap[nodes[j].id];
-            const dx = n2.x - n1.x;
-            const dy = n2.y - n1.y;
-            const dist = Math.hypot(dx, dy) || 1;
-            if (dist < 65) {
-              const force = (65 - dist) / dist * 0.2;
-              n1.x -= dx * force;
-              n1.y -= dy * force;
-              n2.x += dx * force;
-              n2.y += dy * force;
-            }
-          }
-        }
-      }
+/* ---------- theme ---------- */
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+function applyTheme(pref) {
+  const dark = pref === "dark" || (pref === "system" && darkQuery.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.dataset.themePref = pref;
+  document.querySelectorAll(".theme-choice").forEach((b) => {
+    const on = b.dataset.themeChoice === pref;
+    b.setAttribute("aria-checked", String(on));
+    b.classList.toggle("bg-surface", on);
+    b.classList.toggle("text-ink", on);
+    b.classList.toggle("shadow-sm", on);
+    b.classList.toggle("text-ink-2", !on);
+  });
+  maps.forEach((m) => m.cy.style(mapStyle(m.maxScore, m.labelWidth)));
+}
+document.querySelectorAll(".theme-choice").forEach((b) => b.addEventListener("click", () => {
+  storageSet("lore-theme", b.dataset.themeChoice);
+  applyTheme(b.dataset.themeChoice);
+}));
+darkQuery.addEventListener("change", () => applyTheme(document.documentElement.dataset.themePref || "system"));
 
-      const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      edges.forEach(e => {
-        const src = nodeMap[e.source];
-        const tgt = nodeMap[e.target];
-        if (!src || !tgt) return;
+/* ---------- example-answer switch ---------- */
+const params = new URLSearchParams(location.search);
+let useExamples = params.has("examples") || storageGet("lore-examples") === "1";
+function refreshExampleSwitch() {
+  const t = $("exToggle");
+  t.setAttribute("aria-checked", String(useExamples));
+  t.classList.toggle("bg-accent", useExamples);
+  t.classList.toggle("bg-line-strong", !useExamples);
+  t.firstElementChild.style.transform = useExamples ? "translateX(16px)" : "none";
+}
+$("exToggle").addEventListener("click", () => {
+  useExamples = !useExamples;
+  storageSet("lore-examples", useExamples ? "1" : "0");
+  refreshExampleSwitch();
+});
 
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', src.x);
-        line.setAttribute('y1', src.y);
-        line.setAttribute('x2', tgt.x);
-        line.setAttribute('y2', tgt.y);
-        line.setAttribute('stroke', 'rgba(148, 163, 184, 0.45)');
-        line.setAttribute('stroke-width', '1.5');
-        line.setAttribute('marker-end', 'url(#arrow)');
-        edgeGroup.appendChild(line);
+/* ---------- popovers (settings, tools) ---------- */
+function setupPopover(buttonId, menuId) {
+  const btn = $(buttonId), menu = $(menuId);
+  const close = () => { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    document.querySelectorAll("[aria-haspopup]").forEach((b) => {
+      if (b !== btn) { b.setAttribute("aria-expanded", "false"); $(b.getAttribute("aria-controls")).hidden = true; }
+    });
+    menu.hidden = !open;
+    btn.setAttribute("aria-expanded", String(open));
+    if (open) { const first = menu.querySelector("button"); if (first) first.focus(); }
+  });
+  document.addEventListener("click", (e) => { if (!menu.hidden && !menu.contains(e.target)) close(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.hidden) { close(); btn.focus(); } });
+  return close;
+}
+setupPopover("settingsBtn", "settingsMenu");
+const closeTools = setupPopover("toolsBtn", "toolsMenu");
+document.querySelectorAll(".tool-item").forEach((item) => item.addEventListener("click", () => {
+  closeTools();
+  fillComposer(item.dataset.fill);
+}));
 
-        if (e.relation) {
-          const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          text.setAttribute('x', (src.x + tgt.x) / 2);
-          text.setAttribute('y', (src.y + tgt.y) / 2 - 3);
-          text.setAttribute('fill', '#94a3b8');
-          text.setAttribute('font-size', '9px');
-          text.setAttribute('font-family', 'var(--mono)');
-          text.setAttribute('text-anchor', 'middle');
-          text.textContent = e.relation;
-          edgeGroup.appendChild(text);
-        }
+/* ---------- composer ---------- */
+const input = $("q");
+let busy = false;
+function autosize() {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 200) + "px";
+}
+function refreshSend() { $("send").disabled = busy || !input.value.trim(); }
+function fillComposer(text) {
+  input.value = text;
+  autosize(); refreshSend();
+  input.focus();
+  input.setSelectionRange(text.length, text.length);
+}
+input.addEventListener("input", () => { autosize(); refreshSend(); });
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    if (!$("send").disabled) $("composer").requestSubmit();
+  }
+});
+$("composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = input.value.trim();
+  if (!q || busy) return;
+  input.value = ""; autosize();
+  ask(q);
+});
+new ResizeObserver(() => {
+  document.documentElement.style.setProperty("--composer-h", $("composerWrap").offsetHeight + "px");
+}).observe($("composerWrap"));
+
+/* quiet border under the top bar once the page scrolls */
+window.addEventListener("scroll", () => {
+  $("topbar").classList.toggle("border-line", window.scrollY > 4);
+  $("topbar").classList.toggle("border-transparent", window.scrollY <= 4);
+}, { passive: true });
+
+/* ---------- suggestions ---------- */
+function renderSuggestions() {
+  $("suggestions").innerHTML = SUGGESTIONS.map((s, i) => `
+    <button type="button" data-i="${i}"
+      class="group rounded-[12px] border border-line bg-surface px-4 py-3 text-left transition-[border-color,box-shadow] duration-150 hover:border-line-strong hover:shadow-[var(--shadow)]">
+      <span class="block text-[14px] leading-snug text-ink">${escapeHtml(s.label || s.q)}</span>
+      <span class="mt-1 block text-[12.5px] leading-snug text-muted">${escapeHtml(s.hint)}</span>
+    </button>`).join("");
+  $("suggestions").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    fillComposer(SUGGESTIONS[Number(b.dataset.i)].q);
+  }));
+}
+
+/* ---------- thread ---------- */
+const maps = [];
+function scrollToEnd() {
+  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" });
+}
+function showThread() { $("empty").hidden = true; }
+
+function addUserMessage(text) {
+  showThread();
+  const el = document.createElement("div");
+  el.className = "flex justify-end reveal";
+  el.innerHTML = `<div class="max-w-[85%] whitespace-pre-wrap break-words rounded-[14px] bg-tint px-4 py-2.5 text-[15px] leading-relaxed text-ink">${escapeHtml(text)}</div>`;
+  $("thread").appendChild(el);
+  return el;
+}
+
+function addThinking() {
+  const el = document.createElement("article");
+  el.className = "agent reveal";
+  el.setAttribute("aria-busy", "true");
+  el.innerHTML = `<div class="flex items-center gap-2.5 py-1 text-[14px] text-muted"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span>Reading the graph</span></div>`;
+  $("thread").appendChild(el);
+  return el;
+}
+
+async function ask(question) {
+  busy = true; refreshSend();
+  addUserMessage(question);
+  const el = addThinking();
+  scrollToEnd();
+  try {
+    const data = await askLore(question);
+    await renderAnswer(el, question, data, { stream: true });
+    $("live").textContent = "Answer ready.";
+  } catch (err) {
+    renderError(el, question, err.message);
+  } finally {
+    busy = false; refreshSend();
+  }
+}
+
+async function askLore(question) {
+  if (useExamples) return exampleAnswer(question, "Example answers are on, so this uses saved data.");
+  let res;
+  try {
+    res = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
+  } catch (e) {
+    return exampleAnswer(question, "The agent isn't reachable, so this uses saved example data.");
+  }
+  if ([404, 405, 501].includes(res.status)) {
+    return exampleAnswer(question, "The agent isn't running on this server yet, so this uses saved example data.");
+  }
+  if (res.status === 429) throw new Error("Too many questions in a minute. Wait a moment, then ask again.");
+  if (!res.ok) throw new Error(`The server returned an error (status ${res.status}). Ask again in a moment.`);
+  return res.json();
+}
+
+function renderError(el, question, message) {
+  el.removeAttribute("aria-busy");
+  el.innerHTML = `
+    <div class="rounded-[12px] border border-line bg-surface px-4 py-3 text-[14px] text-ink-2">
+      <p>Lore couldn't answer that. ${escapeHtml(message || "")}</p>
+      <button type="button" class="retry mt-2 text-[13px] font-medium text-accent hover:underline">Ask again</button>
+    </div>`;
+  el.querySelector(".retry").addEventListener("click", () => { el.remove(); ask(question); });
+}
+
+/* Write the answer in, a few words at a time, then add the evidence below it. */
+async function streamInto(target, text, sources) {
+  if (reducedMotion()) { target.innerHTML = formatAnswer(text, sources); return; }
+  const tokens = text.split(/(\s+)/);
+  const per = Math.max(2, Math.ceil(tokens.length / 90));     /* finish in about 1.5 s */
+  for (let i = per; i < tokens.length + per; i += per) {
+    target.innerHTML = formatAnswer(tokens.slice(0, i).join(""), sources) ;
+    const last = target.lastElementChild || target;
+    last.insertAdjacentHTML("beforeend", '<span class="caret" aria-hidden="true"></span>');
+    await sleep(16);
+  }
+  target.innerHTML = formatAnswer(text, sources);
+}
+
+async function renderAnswer(el, question, data, { stream }) {
+  /* Be forgiving about the exact shape: number sources that come without "n", and read the
+     graph's own fields (status "owner_and_knower", "weight") as official / score. */
+  const sources = (data.sources || []).filter(Boolean).map((s, i) => (s.n != null ? s : { ...s, n: i + 1 }));
+  const steps = data.steps || [];
+  const rawEvidence = data.evidence || { nodes: [], edges: [] };
+  const evidence = {
+    ...rawEvidence,
+    nodes: (rawEvidence.nodes || []).map((n) => {
+      const out = { ...n };
+      if (out.score == null && out.weight != null) out.score = out.weight;
+      if (out.official == null && /owner/.test(String(out.status || ""))) out.official = true;
+      return out;
+    }),
+    edges: rawEvidence.edges || []
+  };
+  el.removeAttribute("aria-busy");
+  el.innerHTML = "";
+
+  if (data.is_stub || data.notice) {
+    el.insertAdjacentHTML("beforeend", `
+      <p class="mb-3 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+        <span class="rounded-full border border-line px-2 py-0.5 text-[11.5px] text-ink-2">Example answer</span>
+        <span>${escapeHtml(data.notice || "This answer uses saved example data.")}</span>
+      </p>`);
+  }
+  const answer = document.createElement("div");
+  answer.className = "answer text-[15px] leading-[1.7] text-ink";
+  el.appendChild(answer);
+
+  const text = data.answer || "Lore didn't return an answer for this question.";
+  if (stream) await streamInto(answer, text, sources); else answer.innerHTML = formatAnswer(text, sources);
+
+  const extras = document.createElement("div");
+  extras.className = stream ? "reveal" : "";
+  el.appendChild(extras);
+
+  const persons = (evidence.nodes || []).filter((n) => n.type === "Person");
+  if ((evidence.nodes || []).length) extras.appendChild(buildMap(evidence));
+  const panel = buildPeoplePanel(persons, steps);
+  if (panel) extras.appendChild(panel);
+  const draft = data.draft || draftFromSteps(steps);
+  if (draft && draft.comment) extras.appendChild(buildDraft(draft));
+  extras.appendChild(buildDetails(steps, sources));
+  extras.appendChild(buildActions(text));
+  maps.forEach((m) => m.fit && m.fit());
+  if (stream) scrollToEnd();
+}
+
+/* ---------- evidence map ---------- */
+function isOfficial(n) { return n.official === true || n.status === "owner" || n.is_official_owner === true; }
+
+function mapStyle(maxScore, labelWidth = 120) {
+  const ink = cssVar("--ink"), muted = cssVar("--muted"), accent = cssVar("--accent");
+  const surface = cssVar("--surface"), line = cssVar("--line-strong");
+  const font = "Inter, ui-sans-serif, system-ui, sans-serif";
+  const personSize = (ele) => {
+    const s = Number(ele.data("score"));
+    return s > 0 && maxScore > 0 ? 10 + 12 * Math.sqrt(s / maxScore) : 11;
+  };
+  return [
+    { selector: "node", style: {
+        width: 10, height: 10, "background-color": muted, "border-width": 0,
+        label: "data(label)", color: cssVar("--ink-2"), "font-family": font, "font-size": 11,
+        "text-valign": "bottom", "text-margin-y": 5, "text-wrap": "ellipsis", "text-max-width": labelWidth,
+        "text-outline-color": surface, "text-outline-width": 2, "min-zoomed-font-size": 6,
+        "transition-property": "opacity", "transition-duration": 150 } },
+    { selector: 'node[type = "Team"]', style: { shape: "round-rectangle", width: 15, height: 15, "background-color": ink, color: ink, "font-weight": 600 } },
+    { selector: 'node[type = "KEP"]', style: { shape: "diamond", width: 14, height: 14, "background-color": surface, "border-width": 1.5, "border-color": ink } },
+    { selector: 'node[type = "Person"]', style: { shape: "ellipse", width: personSize, height: personSize, "background-color": muted } },
+    { selector: 'node[type = "Person"][?official]', style: { "background-color": ink } },
+    { selector: 'node[type = "Person"][?knower][!official]', style: { "background-color": accent, color: accent } },
+    { selector: 'node[type = "PR"], node[type = "Issue"]', style: { shape: "hexagon", width: 8, height: 8, label: "" } },
+    { selector: 'node[type = "Folder"]', style: { shape: "rectangle", width: 10, height: 10, "background-color": surface, "border-width": 1.2, "border-color": muted } },
+    { selector: 'node[type = "FeatureGate"]', style: { shape: "octagon", width: 10, height: 10, "background-color": surface, "border-width": 1.2, "border-color": muted } },
+    { selector: "edge", style: {
+        width: 1, "line-color": line, "curve-style": "bezier",
+        "target-arrow-shape": "triangle", "target-arrow-color": line, "arrow-scale": 0.6,
+        "font-family": font, "font-size": 10, color: muted,
+        "text-outline-color": surface, "text-outline-width": 2, "text-rotation": "autorotate",
+        "transition-property": "opacity, line-color", "transition-duration": 150 } },
+    { selector: ".dim", style: { opacity: 0.18 } },
+    { selector: "edge.hl", style: { "line-color": ink, "target-arrow-color": ink, label: "data(text)", width: 1.3 } },
+    { selector: "node.hl", style: { label: "data(label)" } }
+  ];
+}
+
+function pickLayout(cy) {
+  const count = cy.nodes().length;
+  const hub = cy.nodes().max((n) => n.degree()).ele;
+  const star = count >= 4 && hub && cy.edges().every((e) => e.source().id() === hub.id() || e.target().id() === hub.id());
+  if (star) {
+    /* A hub and its ring, spread over the whole card (an ellipse, not a circle), so labels stay readable.
+       Order around the ring: people doing the work, then other people, then official owners, then the rest,
+       so the "does the work" group and the "official" group sit on opposite sides. */
+    const box = cy.container();
+    const w = box.clientWidth, h = box.clientHeight;
+    const rank = (n) => n.data("type") !== "Person" ? 3 : n.data("official") ? 2 : n.data("knower") ? 0 : 1;
+    const ring = cy.nodes().not(hub).sort((a, b) => rank(a) - rank(b) || (b.data("score") - a.data("score")));
+    const rx = Math.max(90, Math.min(w / 2 - 80, 270)), ry = Math.max(70, h / 2 - 40);
+    const pos = { [hub.id()]: { x: w / 2, y: h / 2 } };
+    ring.forEach((n, i) => {
+      const a = -Math.PI / 2 - Math.PI / ring.length + (2 * Math.PI * i) / ring.length;
+      pos[n.id()] = { x: w / 2 + rx * Math.cos(a), y: h / 2 + ry * Math.sin(a) };
+    });
+    return { name: "preset", positions: (n) => pos[n.id()], fit: false, animate: false };
+  }
+  const roots = cy.nodes().filter((n) => n.indegree() === 0);
+  return { name: "breadthfirst", animate: false, padding: 30, directed: true, maximal: true, roots: roots.length ? roots : undefined, spacingFactor: 1.15 };
+}
+
+function buildMap(evidence) {
+  const nodes = evidence.nodes || [], edges = evidence.edges || [];
+  const ids = new Set(nodes.map((n) => n.id));
+  const maxScore = Math.max(0, ...nodes.map((n) => Number(n.score) || 0));
+  const figure = document.createElement("figure");
+  figure.className = "mt-6 overflow-hidden rounded-[12px] border border-line bg-surface";
+  figure.innerHTML = `
+    <div class="map" role="img" aria-label="Evidence map with ${nodes.length} items"></div>
+    <figcaption class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line px-4 py-2.5 text-[12px] text-muted">${legendHtml(nodes)}</figcaption>`;
+  if (typeof cytoscape === "undefined") {
+    figure.querySelector(".map").innerHTML = `<p class="grid h-full place-items-center px-6 text-center text-[13px] text-muted">The map couldn't load. Check your connection, then reload the page.</p>`;
+    return figure;
+  }
+  const elements = [
+    ...nodes.map((n) => ({ data: {
+      id: n.id, label: n.label || n.id, type: n.type,
+      official: isOfficial(n) || undefined,
+      knower: (Number(n.score) > 0) || undefined,
+      score: Number(n.score) || 0 } })),
+    ...edges.filter((e) => ids.has(e.source) && ids.has(e.target))
+      .map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target, text: edgeText(e.label || e.relation) } }))
+  ];
+  /* Cytoscape needs its box in the page before it can measure it. */
+  requestAnimationFrame(() => {
+    const labelWidth = figure.clientWidth < 520 ? 76 : 120;   /* shorter labels on phones */
+    const cy = cytoscape({
+      container: figure.querySelector(".map"), elements, style: mapStyle(maxScore, labelWidth),
+      userZoomingEnabled: false, userPanningEnabled: false, boxSelectionEnabled: false,
+      minZoom: 0.4, maxZoom: 1.15, autoungrabify: false
+    });
+    const fit = () => { cy.resize(); cy.layout(pickLayout(cy)).run(); cy.fit(undefined, 30); };
+    fit();
+    const focus = (n) => { cy.elements().addClass("dim"); n.closedNeighborhood().removeClass("dim").addClass("hl"); };
+    const clear = () => cy.elements().removeClass("dim hl");
+    cy.on("mouseover", "node", (e) => focus(e.target));
+    cy.on("mouseout", "node", clear);
+    cy.on("tap", (e) => { if (e.target === cy) clear(); else if (e.target.isNode && e.target.isNode()) { clear(); focus(e.target); } });
+    maps.push({ cy, maxScore, labelWidth, fit });
+  });
+  return figure;
+}
+
+function legendHtml(nodes) {
+  const dot = (bg, border) => `<span class="inline-block h-2 w-2 rounded-full" style="background:${bg};${border ? `box-shadow: inset 0 0 0 1.2px ${border}` : ""}"></span>`;
+  const items = [];
+  const persons = nodes.filter((n) => n.type === "Person");
+  if (persons.some(isOfficial)) items.push(`${dot("var(--ink)")}Official owner`);
+  if (persons.some((n) => Number(n.score) > 0 && !isOfficial(n))) items.push(`${dot("var(--accent)")}Does the work, not an official owner`);
+  if (persons.some((n) => !isOfficial(n) && !(Number(n.score) > 0))) items.push(`${dot("var(--muted)")}Person`);
+  const types = [...new Set(nodes.map((n) => n.type))].filter((t) => t !== "Person" && TYPE_NAMES[t]);
+  types.forEach((t) => {
+    const shape = t === "Team" ? `<span class="inline-block h-2 w-2 rounded-[2px] bg-ink"></span>`
+      : t === "KEP" ? `<span class="inline-block h-2 w-2 rotate-45 border-[1.2px] border-ink"></span>`
+      : `<span class="inline-block h-2 w-2 border-[1.2px] border-muted"></span>`;
+    items.push(`${shape}${escapeHtml(TYPE_NAMES[t])}`);
+  });
+  if (persons.some((n) => Number(n.score) > 0)) items.push(`<span class="text-muted">Larger dot, more work</span>`);
+  return items.map((i) => `<span class="inline-flex items-center gap-1.5">${i}</span>`).join("");
+}
+
+/* ---------- owners vs. the people doing the work ---------- */
+function buildPeoplePanel(persons, steps) {
+  const asked = steps.some((s) => s.tool === "who_owns" || s.tool === "who_knows");
+  const owners = persons.filter(isOfficial);
+  const knowers = persons.filter((n) => Number(n.score) > 0).sort((a, b) => b.score - a.score).slice(0, 6);
+  if (!asked || (!owners.length && !knowers.length)) return null;
+  const name = (n) => escapeHtml(n.label || String(n.id).replace(/^person:/, ""));
+  const wrap = document.createElement("div");
+  wrap.className = "mt-6 grid grid-cols-1 gap-6 text-[13.5px] min-[420px]:grid-cols-2";
+  wrap.innerHTML = `
+    <section>
+      <h3 class="mb-2 text-[12.5px] font-normal text-muted">Official owners</h3>
+      ${owners.length ? `<ul class="space-y-1.5">${owners.map((n) => `
+        <li class="flex items-center gap-2"><span class="h-1.5 w-1.5 shrink-0 rounded-full bg-ink"></span><span class="truncate">${name(n)}</span></li>`).join("")}</ul>`
+        : `<p class="text-muted">None listed in this answer.</p>`}
+    </section>
+    <section>
+      <h3 class="mb-2 text-[12.5px] font-normal text-muted">Does the work</h3>
+      ${knowers.length ? `<ul class="space-y-1.5">${knowers.map((n) => `
+        <li class="flex items-center gap-2">
+          <span class="h-1.5 w-1.5 shrink-0 rounded-full ${isOfficial(n) ? "bg-ink" : "bg-accent"}"></span>
+          <span class="truncate ${isOfficial(n) ? "" : "text-accent"}">${name(n)}</span>
+          <span class="num ml-auto pl-3 text-muted">${Number(n.score).toLocaleString("en")}</span>
+        </li>`).join("")}</ul>`
+        : `<p class="text-muted">No activity counts in this answer.</p>`}
+    </section>`;
+  return wrap;
+}
+
+/* ---------- draft reply (from route_issue) ---------- */
+function draftFromSteps(steps) {
+  const s = steps.find((x) => x.tool === "route_issue" && x.data && x.data.draft_comment);
+  return s ? { comment: s.data.draft_comment, label: s.data.label } : null;
+}
+let demoIssues = null;
+function loadDemoIssues() {
+  if (!demoIssues) {
+    demoIssues = fetch("/api/demo-issues").then((r) => (r.ok ? r.json() : null)).then((d) => {
+      const list = Array.isArray(d) ? d : d && Array.isArray(d.issues) ? d.issues : null;
+      return list ? list.filter((i) => i && i.number != null) : null;
+    }).catch(() => null);
+  }
+  return demoIssues;
+}
+function buildDraft(draft) {
+  const box = document.createElement("section");
+  box.className = "mt-6 rounded-[12px] border border-line bg-surface p-4";
+  box.innerHTML = `
+    <h3 class="text-[13.5px] font-medium text-ink">Draft reply</h3>
+    <p class="mt-0.5 text-[12.5px] text-muted">Nothing is posted until you approve it, and only to our practice repo.</p>
+    <blockquote class="mt-3 whitespace-pre-wrap border-l-2 border-line-strong pl-3 text-[14px] leading-relaxed text-ink-2">${escapeHtml(draft.comment)}</blockquote>
+    <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+      <label class="sr-only" for="">Practice issue</label>
+      <select class="issue h-9 min-w-0 flex-1 rounded-[9px] border border-line bg-canvas px-2.5 text-[13.5px] text-ink" disabled>
+        <option>Loading practice issues</option>
+      </select>
+      <button type="button" class="approve h-9 rounded-[9px] bg-ink px-3.5 text-[13.5px] font-medium text-canvas transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40" disabled>Approve and post</button>
+    </div>
+    <p class="result mt-2 min-h-[1.2em] text-[12.5px] text-muted" role="status"></p>`;
+  const select = box.querySelector(".issue"), button = box.querySelector(".approve"), result = box.querySelector(".result");
+  const id = "issue-" + Math.random().toString(36).slice(2, 8);
+  select.id = id; box.querySelector("label").setAttribute("for", id);
+  loadDemoIssues().then((issues) => {
+    if (!issues || !issues.length) {
+      select.innerHTML = `<option>No practice issues available</option>`;
+      result.textContent = "The practice repo isn't connected on this server, so this draft can't be posted.";
+      return;
+    }
+    select.innerHTML = `<option value="">Choose a practice issue</option>` +
+      issues.map((i) => `<option value="${escapeHtml(i.number)}">#${escapeHtml(i.number)} ${escapeHtml(i.title || "")}</option>`).join("");
+    select.disabled = false;
+  });
+  select.addEventListener("change", () => { button.disabled = !select.value; });
+  button.addEventListener("click", async () => {
+    button.disabled = true; select.disabled = true;
+    result.textContent = "Posting";
+    try {
+      const res = await fetch("/api/approve", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issue_number: Number(select.value), comment: draft.comment, labels: draft.label ? [draft.label] : [] })
       });
-      svg.appendChild(edgeGroup);
-
-      const nodeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      nodes.forEach(n => {
-        const pos = nodeMap[n.id];
-        const style = typeColors[n.type] || { fill: '#64748b', stroke: '#94a3b8', text: '#f8fafc' };
-
-        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
-        g.style.cursor = 'pointer';
-
-        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        circle.setAttribute('r', n.type === 'Team' ? '18' : '14');
-        circle.setAttribute('fill', style.fill);
-        circle.setAttribute('stroke', style.stroke);
-        circle.setAttribute('stroke-width', '2');
-        circle.setAttribute('filter', 'url(#glow)');
-        g.appendChild(circle);
-
-        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        label.setAttribute('y', n.type === 'Team' ? '30' : '26');
-        label.setAttribute('fill', style.text);
-        label.setAttribute('font-size', '11px');
-        label.setAttribute('font-family', 'var(--mono)');
-        label.setAttribute('text-anchor', 'middle');
-        label.setAttribute('font-weight', '500');
-        const displayText = n.label || n.id.split(':').pop();
-        label.textContent = displayText.length > 18 ? displayText.slice(0, 16) + '…' : displayText;
-        g.appendChild(label);
-
-        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-        title.textContent = `${n.type}: ${n.label || n.id} (${n.status || ''})`;
-        g.appendChild(title);
-
-        nodeGroup.appendChild(g);
-      });
-      svg.appendChild(nodeGroup);
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok || !out.ok) throw new Error(out.error || `status ${res.status}`);
+      const url = safeUrl(out.comment_url);
+      result.innerHTML = url ? `Posted. <a class="text-accent hover:underline" href="${escapeHtml(url)}" target="_blank" rel="noopener">See it on GitHub</a>` : "Posted.";
+      button.textContent = "Posted";
+    } catch (e) {
+      result.textContent = `Couldn't post: ${e.message}. Check the server's GitHub token, then try again.`;
+      button.disabled = false; select.disabled = false;
     }
+  });
+  return box;
+}
 
-    // Example question pills click
-    document.querySelectorAll('.example-pill').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const q = btn.getAttribute('data-q');
-        questionInput.value = q;
-        submitQuestion(q);
-      });
-    });
+/* ---------- how Lore answered (steps and sources) ---------- */
+function buildDetails(steps, sources) {
+  const d = document.createElement("details");
+  d.className = "mt-6";
+  if (!steps.length && !sources.length) return d;
+  const parts = [];
+  if (steps.length) parts.push(`${steps.length} ${steps.length === 1 ? "step" : "steps"}`);
+  if (sources.length) parts.push(`${sources.length} ${sources.length === 1 ? "source" : "sources"}`);
+  d.innerHTML = `
+    <summary class="inline-flex cursor-pointer items-center gap-1.5 rounded-md text-[13px] text-muted transition-colors duration-150 hover:text-ink">
+      <svg class="chev transition-transform duration-150" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2.5 8 6l-3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      How Lore answered <span class="text-muted/80">(${parts.join(", ")})</span>
+    </summary>
+    <div class="mt-3 space-y-5 border-l border-line pl-4">
+      ${steps.length ? `<ol class="space-y-2.5">${steps.map((s) => `
+        <li class="text-[13.5px] leading-snug">
+          <span class="block font-medium text-ink">${escapeHtml(TOOL_NAMES[s.tool] || s.tool)}</span>
+          <span class="mt-0.5 block text-muted">${escapeHtml(s.summary || "")}</span>
+        </li>`).join("")}</ol>` : ""}
+      ${sources.length ? `<ol class="space-y-1.5 text-[13.5px]">${sources.map((s) => {
+        const url = safeUrl(s.url), title = escapeHtml(s.title || s.url || "Source");
+        return `<li class="flex gap-2"><span class="num w-5 shrink-0 text-right text-muted">${escapeHtml(s.n)}</span>${url ? `<a class="text-ink-2 underline decoration-line-strong underline-offset-2 transition-colors duration-150 hover:text-ink hover:decoration-ink" href="${escapeHtml(url)}" target="_blank" rel="noopener">${title}</a>` : `<span class="text-ink-2">${title}</span>`}</li>`;
+      }).join("")}</ol>` : ""}
+    </div>`;
+  return d;
+}
 
-    askBtn.addEventListener('click', () => submitQuestion(questionInput.value));
-    questionInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') submitQuestion(questionInput.value);
-    });
+function buildActions(text) {
+  const row = document.createElement("div");
+  row.className = "mt-3 flex items-center gap-1";
+  row.innerHTML = `
+    <button type="button" class="copy inline-flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[12.5px] text-muted transition-colors duration-150 hover:bg-line/60 hover:text-ink">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5" stroke="currentColor" stroke-width="1.3"/></svg>
+      <span>Copy answer</span>
+    </button>`;
+  const btn = row.querySelector(".copy");
+  btn.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(text); btn.lastElementChild.textContent = "Copied"; }
+    catch (e) { btn.lastElementChild.textContent = "Couldn't copy"; }
+    setTimeout(() => { btn.lastElementChild.textContent = "Copy answer"; }, 1500);
+  });
+  return row;
+}
 
-    // Approve Button Action (Team Member C's Action Router)
-    approveBtn.addEventListener('click', () => {
-      document.getElementById('triage').scrollIntoView({ behavior: 'smooth' });
-    });
+/* ---------- new chat ---------- */
+$("newChat").addEventListener("click", () => {
+  maps.splice(0).forEach((m) => m.cy.destroy());
+  $("thread").innerHTML = "";
+  $("empty").hidden = false;
+  input.value = ""; autosize(); refreshSend();
+  window.scrollTo({ top: 0 });
+  input.focus();
+});
+window.addEventListener("resize", () => maps.forEach((m) => m.fit()));
 
+/* =====================================================================
+   Example answers. Numbers come from Lore's real tools on the
+   Kubernetes graph (Oct 2025 to Oct 2026 PR data, all KEPs).
+   ===================================================================== */
+const KEP = (path) => `https://github.com/kubernetes/enhancements/tree/master/keps/${path}`;
+const P = (login, extra) => ({ id: `person:${login.toLowerCase()}`, label: login, type: "Person", ...extra });
 
-    // Live Triage flow: GET /api/demo-issues -> GET /api/route-issue/{n} -> human edits -> POST /api/approve
-    const triageSelect = document.getElementById('triage-issue');
-    const triageRouteBtn = document.getElementById('triage-route-btn');
-    const triageResult = document.getElementById('triage-result');
-    const triageComment = document.getElementById('triage-comment');
-    const triageApproveBtn = document.getElementById('triage-approve-btn');
-    let triageLabels = [];
-    function triagePasscode() {
-      return sessionStorage.getItem('lore-approve-passcode') || '';
+const EXAMPLES = [
+  {
+    match: /new issue|issue go|where should|one by one|triage/i,
+    response: {
+      answer: "This belongs to SIG Scheduling. Pods that should start together but start one at a time is what gang scheduling solves, and the current design for it is KEP-4671 [1].\n\nThe best people to look at it are macsko, who wrote KEP-4671, dom4ha, who approved it, and mm4tt, a co-author. All three were active in SIG Scheduling in the last 90 days [1][2]. A draft reply is below.",
+      steps: [{ tool: "route_issue", input: { title: "Pods in my training job start one by one instead of all at once" },
+        summary: "Matched gang scheduling: SIG Scheduling (score 84, next SIG Apps 62). Related decision KEP-4671. Suggested macsko, dom4ha and mm4tt." }],
+      evidence: {
+        nodes: [
+          { id: "team:sig-scheduling", label: "SIG Scheduling", type: "Team" },
+          { id: "kep:4671", label: "KEP-4671 Gang Scheduling", type: "KEP" },
+          P("macsko", { official: true, score: 597 }), P("dom4ha", { official: true, score: 233 }), P("mm4tt", { score: 100 })
+        ],
+        edges: [
+          { source: "kep:4671", target: "team:sig-scheduling", label: "OWNED_BY" },
+          { source: "person:macsko", target: "kep:4671", label: "AUTHORED" },
+          { source: "person:mm4tt", target: "kep:4671", label: "AUTHORED" },
+          { source: "person:dom4ha", target: "kep:4671", label: "APPROVED" }
+        ]
+      },
+      sources: [
+        { n: 1, title: "KEP-4671 Gang Scheduling", url: KEP("sig-scheduling/4671-gang-scheduling") },
+        { n: 2, title: "Merged SIG Scheduling pull requests", url: "https://github.com/kubernetes/kubernetes/pulls?q=is%3Apr+is%3Amerged+label%3Asig%2Fscheduling" }
+      ],
+      draft: { comment: "This looks related to gang scheduling (KEP-4671). Suggested team: SIG Scheduling. People who know this area: macsko, dom4ha, mm4tt.", label: "sig/scheduling" }
     }
-
-    async function loadDemoIssues() {
-      try {
-        const res = await fetch('/api/demo-issues');
-        const data = await res.json();
-        triageSelect.innerHTML = '';
-        if (!Array.isArray(data)) throw new Error(data.error || 'unavailable');
-        data.forEach(i => {
-          const opt = document.createElement('option');
-          opt.value = i.number; opt.textContent = `#${i.number} ${i.title}`;
-          triageSelect.appendChild(opt);
-        });
-      } catch (err) {
-        triageSelect.innerHTML = '<option>Practice repo not configured</option>';
-      }
+  },
+  {
+    match: /gang|cosched|podgroup/i,
+    response: {
+      answer: "Gang scheduling is owned by SIG Scheduling. The current design is KEP-4671, Gang Scheduling, approved by dom4ha and sanposhiho. It reached alpha in v1.35, beta in v1.37 and stable in v1.38 [1].\n\nIt replaces Coscheduling (KEP-583), first proposed in 2018 [2], and its file also lists Decouple PodGroup API (KEP-5832, 2026) as replaced [3]. The people who know it best are macsko, who wrote it, dom4ha, who approved it, and mm4tt, a co-author who is not an official SIG Scheduling leader [1].",
+      steps: [
+        { tool: "why", input: { thing: "KEP-4671" }, summary: "Coscheduling (KEP-583, 2018) led to Gang Scheduling (KEP-4671, 2025), which also lists KEP-5832 as replaced. Stable in v1.38." },
+        { tool: "who_knows", input: { thing: "KEP-4671" }, summary: "macsko (author, 597), dom4ha (approver, 233), mm4tt (author, 100)." }
+      ],
+      evidence: {
+        nodes: [
+          { id: "kep:583", label: "KEP-583 Coscheduling", type: "KEP" },
+          { id: "kep:4671", label: "KEP-4671 Gang Scheduling", type: "KEP" },
+          { id: "kep:5832", label: "KEP-5832 Decouple PodGroup API", type: "KEP" },
+          { id: "team:sig-scheduling", label: "SIG Scheduling", type: "Team" },
+          { id: "gate:GenericWorkload", label: "GenericWorkload", type: "FeatureGate" },
+          P("macsko", { official: true, score: 597 }), P("dom4ha", { official: true, score: 233 }),
+          P("sanposhiho", { official: true }), P("mm4tt", { score: 100 })
+        ],
+        edges: [
+          { source: "kep:4671", target: "kep:583", label: "REPLACES" },
+          { source: "kep:4671", target: "kep:5832", label: "REPLACES" },
+          { source: "kep:4671", target: "team:sig-scheduling", label: "OWNED_BY" },
+          { source: "kep:4671", target: "gate:GenericWorkload", label: "INTRODUCES" },
+          { source: "person:macsko", target: "kep:4671", label: "AUTHORED" },
+          { source: "person:mm4tt", target: "kep:4671", label: "AUTHORED" },
+          { source: "person:dom4ha", target: "kep:4671", label: "APPROVED" },
+          { source: "person:sanposhiho", target: "kep:4671", label: "APPROVED" }
+        ]
+      },
+      sources: [
+        { n: 1, title: "KEP-4671 Gang Scheduling", url: KEP("sig-scheduling/4671-gang-scheduling") },
+        { n: 2, title: "KEP-583 Coscheduling", url: KEP("sig-scheduling/583-coscheduling") },
+        { n: 3, title: "KEP-5832 Decouple PodGroup API", url: KEP("sig-scheduling/5832-decouple-podgroup-api") }
+      ]
     }
-
-    triageRouteBtn.addEventListener('click', async () => {
-      triageRouteBtn.disabled = true;
-      document.getElementById('triage-posted').textContent = '';
-      try {
-        const res = await fetch('/api/route-issue/' + encodeURIComponent(triageSelect.value));
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error);
-        triageResult.style.display = 'block';
-        const votes = (data.team_scores || []).map(t => `${t.team} ${t.score}`).join(', ');
-        document.getElementById('triage-summary').textContent =
-          `Suggested team: ${data.team || 'none'}  (graph scores: ${votes})`;
-        const ul = document.getElementById('triage-reviewers');
-        ul.innerHTML = '';
-        (data.people || []).forEach(p => {
-          const li = document.createElement('li');
-          li.className = 'person-row';
-          li.textContent = `${p.display || p.login}: ${p.reason || ''}`;
-          ul.appendChild(li);
-        });
-        triageLabels = data.labels || [];
-        document.getElementById('triage-labels').textContent = 'Labels: ' + triageLabels.concat(['triage/lore-suggested']).join(', ');
-        triageComment.value = data.comment || '';
-      } catch (err) {
-        showToast('Routing failed: ' + err.message);
-      } finally {
-        triageRouteBtn.disabled = false;
-      }
-    });
-
-    triageApproveBtn.addEventListener('click', async () => {
-      triageApproveBtn.disabled = true;
-      try {
-        const res = await fetch('/api/approve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Approve-Passcode': triagePasscode() },
-          body: JSON.stringify({ issue_number: Number(triageSelect.value), comment: triageComment.value, labels: triageLabels })
-        });
-        const data = await res.json();
-        if (res.status === 403) {
-          const code = prompt('Approve passcode:');
-          if (code) sessionStorage.setItem('lore-approve-passcode', code);
-          throw new Error(data.error);
-        }
-        if (!data.ok) throw new Error(data.error);
-        const out = document.getElementById('triage-posted');
-        out.innerHTML = '';
-        const a = document.createElement('a');
-        a.href = data.comment_url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Posted on GitHub: ' + data.comment_url;
-        out.appendChild(a);
-        showToast('Approved and posted to GitHub.');
-      } catch (err) {
-        showToast('Approve failed: ' + err.message);
-      } finally {
-        triageApproveBtn.disabled = false;
-      }
-    });
-
-    loadDemoIssues();
-
-    function showToast(msg) {
-      toastMsg.textContent = msg;
-      toast.style.display = 'flex';
-      setTimeout(() => {
-        toast.style.display = 'none';
-      }, 4000);
+  },
+  {
+    match: /stuck|stale|abandon|inactive|old decision/i,
+    response: {
+      answer: "25 design decisions look stuck. They are still marked implementable at the alpha stage, and none has a new release milestone since v1.30 or earlier, while the newest release in the data is v1.38 [1].\n\nTwo examples: Hardening exec endpoints against SSRF (KEP-1898, SIG Node, last milestone v1.20) [2] and Prioritization on Volume Capacity (KEP-1845, SIG Storage, v1.20) [3]. They are worth checking with their teams, not proof the work was abandoned.",
+      steps: [{ tool: "whats_stale", input: { team: null }, summary: "25 decisions are implementable at alpha with no milestone after v1.30 (newest in the data: v1.38)." }],
+      evidence: {
+        nodes: [
+          { id: "kep:1898", label: "KEP-1898 Hardening exec endpoints", type: "KEP" },
+          { id: "team:sig-node", label: "SIG Node", type: "Team" },
+          { id: "kep:1845", label: "KEP-1845 Prioritization on Volume Capacity", type: "KEP" },
+          { id: "team:sig-storage", label: "SIG Storage", type: "Team" }
+        ],
+        edges: [
+          { source: "kep:1898", target: "team:sig-node", label: "OWNED_BY" },
+          { source: "kep:1845", target: "team:sig-storage", label: "OWNED_BY" }
+        ]
+      },
+      sources: [
+        { n: 1, title: "Kubernetes design decisions (KEPs)", url: "https://github.com/kubernetes/enhancements/tree/master/keps" },
+        { n: 2, title: "KEP-1898 Hardening exec endpoints against SSRF", url: KEP("sig-node/1898-hardened-exec") },
+        { n: 3, title: "KEP-1845 Prioritization on Volume Capacity", url: KEP("sig-storage/1845-prioritization-on-volume-capacity") }
+      ]
     }
-  </script>
+  },
+  {
+    match: /know|expert|sig.?node/i,
+    response: {
+      answer: "SIG Node has five official leaders: SergeyKanzhelev and haircommander are chairs, dchen1107 and derekwaynecarr are tech leads, and mrunalp is both [1].\n\nThe people doing the most SIG Node work are a different list. Counting design decisions and pull requests they wrote, reviewed or approved over the last year, liggitt leads with 660, then SergeyKanzhelev with 549, pohly with 412, dims with 340 and tallclair with 183 [2]. Only SergeyKanzhelev of those five is an official leader, and the chair dchen1107 ranks 14th.",
+      steps: [
+        { tool: "who_owns", input: { thing: "sig-node" }, summary: "5 official leaders in sigs.yaml: 2 chairs, 2 tech leads, and mrunalp as both." },
+        { tool: "who_knows", input: { thing: "sig-node", as_of: null }, summary: "liggitt 660, SergeyKanzhelev 549, pohly 412, dims 340, tallclair 183. 6 of the top 8 are not official leaders." }
+      ],
+      evidence: {
+        nodes: [
+          { id: "team:sig-node", label: "SIG Node", type: "Team" },
+          P("SergeyKanzhelev", { official: true, score: 549 }), P("haircommander", { official: true }),
+          P("mrunalp", { official: true }), P("dchen1107", { official: true }), P("derekwaynecarr", { official: true }),
+          P("liggitt", { score: 660 }), P("pohly", { score: 412 }), P("dims", { score: 340 }), P("tallclair", { score: 183 })
+        ],
+        edges: [
+          { source: "person:sergeykanzhelev", target: "team:sig-node", label: "LEADS" },
+          { source: "person:haircommander", target: "team:sig-node", label: "LEADS" },
+          { source: "person:mrunalp", target: "team:sig-node", label: "LEADS" },
+          { source: "person:dchen1107", target: "team:sig-node", label: "LEADS" },
+          { source: "person:derekwaynecarr", target: "team:sig-node", label: "LEADS" },
+          { source: "person:liggitt", target: "team:sig-node", label: "REVIEWS_WORK_IN" },
+          { source: "person:pohly", target: "team:sig-node", label: "REVIEWS_WORK_IN" },
+          { source: "person:dims", target: "team:sig-node", label: "REVIEWS_WORK_IN" },
+          { source: "person:tallclair", target: "team:sig-node", label: "REVIEWS_WORK_IN" }
+        ]
+      },
+      sources: [
+        { n: 1, title: "kubernetes/community sigs.yaml", url: "https://github.com/kubernetes/community/blob/master/sigs.yaml" },
+        { n: 2, title: "Merged SIG Node pull requests", url: "https://github.com/kubernetes/kubernetes/pulls?q=is%3Apr+is%3Amerged+label%3Asig%2Fnode" }
+      ]
+    }
+  }
+];
+
+function exampleAnswer(question, notice) {
+  const hit = EXAMPLES.find((e) => e.match.test(question));
+  const base = hit ? hit.response : {
+    answer: "With saved example data, Lore can answer four questions: who actually knows SIG Node, why Kubernetes chose gang scheduling, which design decisions look stuck, and where a new scheduling issue should go. Pick one of the suggestions to see how it works.",
+    steps: [], evidence: { nodes: [], edges: [] }, sources: []
+  };
+  return { question, ...structuredClone(base), is_stub: true, notice };
+}
+
+/* ---------- start ---------- */
+renderSuggestions();
+refreshExampleSwitch();
+if (window.matchMedia("(max-width: 480px)").matches) input.placeholder = "Ask about a team or a decision";
+applyTheme(document.documentElement.dataset.themePref || "system");
+autosize(); refreshSend();
+
+/* ?demo, or opening the file straight from disk: show a short conversation so the page explains itself. */
+if (params.has("demo") || location.protocol === "file:") {
+  (async () => {
+    const q1 = "Who actually knows SIG Node?";
+    addUserMessage(q1);
+    const a1 = document.createElement("article");
+    a1.className = "agent";
+    $("thread").appendChild(a1);
+    await renderAnswer(a1, q1, exampleAnswer(q1, "This is a preview with saved example data."), { stream: false });
+    const q2 = "Why did Kubernetes choose gang scheduling?";
+    addUserMessage(q2);
+    const a2 = addThinking();
+    scrollToEnd();
+    busy = true; refreshSend();
+    await sleep(2200);
+    await renderAnswer(a2, q2, exampleAnswer(q2, "This is a preview with saved example data."), { stream: true });
+    busy = false; refreshSend();
+  })();
+}
+</script>
 </body>
 </html>
