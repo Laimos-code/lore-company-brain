@@ -143,7 +143,7 @@ GitHub data: `kubernetes/kubernetes` PRs merged and issues created from 2025-10-
 | `Person` | `login` (lowercase), `display` | 1,636 | every loader |
 | `Team` | `key` (e.g. `sig-node`), `name`, `kind` | 52 | `load_k8s_brain.py` (`sigs.yaml`) |
 | `Subproject` | `name` | 240 | `load_k8s_brain.py` |
-| `KEP` | `num`, `title`, `status`, `stage`, `created`, `latest` | 679 | `load_k8s_brain.py` (`kep.yaml`) |
+| `KEP` | `num`, `title`, `status`, `stage`, `created`, `latest`, `path` (its folder in kubernetes/enhancements) | 679 | `load_k8s_brain.py` (`kep.yaml`) |
 | `FeatureGate` | `name` | 450 | `load_k8s_brain.py` |
 | `Component` | `name` | 27 | `load_k8s_brain.py` |
 | `Release` | `version` | 59 | `load_k8s_brain.py` |
@@ -269,3 +269,10 @@ Run automated tests:
 pytest -o pythonpath=. tests/test_server.py
 ```
 All 6 tests verify page serving, FalkorDB health ping, verified stub response, decision trails, rate limiting enforcement, and approve action flows.
+
+The graph tools (`app/tools.py`: `who_owns`, `who_knows`, `why`, `whats_stale`, `route_issue`; contract in
+[`docs/tool_contract.md`](docs/tool_contract.md) section 4) are tested on the real graph. These tests skip
+themselves until all three loaders in [📥 Load the data](#-load-the-data) have run:
+```bash
+pytest -o pythonpath=. tests/test_tools.py
+```

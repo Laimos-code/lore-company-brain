@@ -266,3 +266,48 @@ All environment variables are loaded from `.env`:
 - `LLM_BASE_URL`: OpenAI-compatible or provider API endpoint.
 - `LLM_API_KEY`: API authentication key.
 - `LLM_MODEL`: Target model identifier (e.g. `gpt-4o`, `gemini-1.5-pro`, `deepseek-chat`).
+
+---
+
+## 4. Graph Tools (`app/tools.py`)
+
+Five plain Python functions the agent can call. Each runs Cypher on the `k8s` graph (no AI model inside) and returns one envelope:
+
+```json
+{
+  "tool": "who_owns",
+  "summary": "sig-node has 5 official leaders in sigs.yaml: dchen1107 (tech_lead), ...",
+  "data": { "...": "tool-specific fields, see below" },
+  "evidence": {
+    "nodes": [{"id": "team:sig-node", "label": "sig-node", "type": "Team"},
+              {"id": "person:mrunalp", "label": "mrunalp", "type": "Person", "status": "owner"}],
+    "edges": [{"source": "person:mrunalp", "target": "team:sig-node", "relation": "LEADS", "role": "chair, tech_lead"}]
+  },
+  "sources": [{"type": "TEAM", "ref": "sig-node", "title": "sig-node page in kubernetes/community",
+               "url": "https://github.com/kubernetes/community/tree/master/sig-node"}],
+  "is_stub": false
+}
+```
+
+- **Node ids** are `<type>:<key>`: `team:sig-node`, `person:liggitt`, `kep:4671`, `pr:12345`, `folder:pkg/scheduler/framework`, `gate:GenericWorkload`.
+- **Every edge's `source` and `target` are in `nodes`**, and `evidence` holds at most 25 nodes. It uses the same field names as the `graph` part of `/api/ask`, but node ids carry the type prefix.
+- **`sources`** keeps `type`/`ref`/`title` (what the web page shows) and adds a real `url`: a KEP folder, `https://github.com/kubernetes/kubernetes/pull/N`, an OWNERS file, or the team's page in kubernetes/community.
+- **`thing`** can be:
+  - a team: `sig-node`, `SIG Node`, `node`
+  - a KEP: `KEP-4671`, `4671`, or its exact title
+  - a folder or file path: `pkg/scheduler/framework/...`
+  - a feature gate name
+  - a typed id: `team:sig-node`
+- **If nothing matches**, `data.thing` is `null` and `summary` says so.
+
+| Function | What it answers | Main `data` fields |
+| :--- | :--- | :--- |
+| `who_owns(thing)` | Official owners. Team: leaders from `sigs.yaml` (role `chair` / `tech_lead`). Folder: approvers and reviewers from OWNERS files. KEP: owning team's leaders plus the KEP's approvers. | `owners` (team); `approvers`, `reviewers` with their OWNERS file (folder); `team`, `team_leads`, `approvers` (KEP) |
+| `who_knows(thing, as_of=None)` | Who really does the work: distinct KEPs authored / reviewed / approved, plus PRs authored / reviewed / lgtm / approved for that team or folder. For a KEP: the people on it, ranked by their work for its team. `as_of="YYYY-MM-DD"` keeps only evidence dated before that day. | `people[]`: `login`, `total`, `recent` (90 days before `as_of`, or before today), `counts` by kind, `is_official_owner`, `official_roles`. Also `official_owners` with their rank. |
+| `why(thing)` | Decision trail of a KEP or feature gate: what it replaces and what replaced it, related KEPs, status, stage, dates, milestones, approvers, owning team. | `kep`, `trail` (oldest first), `replaces`, `replaced_by`, `see_also`, `milestones`, `approvers`, `authors`, `feature_gates` |
+| `whats_stale(team=None)` | KEPs still `implementable` at `alpha` whose latest milestone is 8+ releases behind the newest. Candidates to check, not proof they are dead. | `newest_release`, `cutoff_release`, `count`, `keps[]` with `team` and `url` |
+| `route_issue(title, body)` | Team, related KEPs, 2–3 people and a draft comment for a new issue. Words are matched against KEP titles, feature gate names and folder paths. | `team`, `label`, `team_scores` (with reasons), `related_keps`, `suggested_people`, `draft_comment` |
+
+- **`draft_comment` never uses `@`**, so posting it to the demo repo doesn't notify real Kubernetes maintainers.
+- **`USE_STUBS=1`** makes every tool return the old fixed stub answers in the same envelope, with `is_stub: true`.
+- **Errors aren't hidden:** a FalkorDB connection error is raised for the caller to handle.
