@@ -5,26 +5,60 @@
 ---
 
 ## 👥 Team & Responsibilities
-- **Ashish**: Data ingestion, graph modeling, query tools, and web interface.
-- **A**: AI Agent (`app/agent.py` implementing `ask(question)`).
-- **You (Shobhit)**: Backend server, API contracts, security, rate limiting, and deployment.
-- **C**: Action router (`app/actions.py` implementing the Approve button) and demo video.
+- **Ashish ([@Laimos-code](https://github.com/Laimos-code))**: data loading, graph model, graph tools (`app/tools.py`), web page.
+- **Shobhit ([@shobhitagnihotri69](https://github.com/shobhitagnihotri69))**: FastAPI server, API contract, security and rate limits, AI agent (`app/agent.py`).
+- **[@Mulaydm10](https://github.com/Mulaydm10)**: Live Triage actions (`app/actions.py`), graph answers without an AI model (`app/brain.py`), reviewer evaluation.
 
 ---
 
-## ⚡ Core Value Propositions
+## ⚡ The problem
 
 Every organization has two org charts:
-1. **The Official One (`OWNS`)**: Stated in `sigs.yaml` and leadership rosters.
-2. **The Real One (`KNOWS`)**: Lives in decision history, KEP authorship, code reviews, and approvals.
+1. **The official one (`OWNS`)**: team leads in `sigs.yaml`, approvers in `OWNERS` files.
+2. **The real one (`KNOWS`)**: who writes the design decisions, reviews the code and answers the issues.
+
+They drift apart. New people ask the official owner, who may not be the one doing the work; decisions get stuck
+with nobody noticing; issues land with the wrong team. Kubernetes publishes both charts and all of its history,
+so Lore proves the idea there: it puts both into one FalkorDB graph and answers from it, with sources.
 
 ### What Lore Discovered on Real Kubernetes Data
-- **1,636 People, 679 Decisions (KEPs), 2,078 Merged PRs, 986 Issues, 645 Code Folders, 450 Feature Gates, 59 Releases, and 57,000+ Connections**.
+- **1,633 People, 679 Decisions (KEPs), 2,078 Merged PRs, 986 Issues, 645 Code Folders, 450 Feature Gates, 59 Releases, and 57,000+ Connections**.
 - **Owns vs. Knows Gap**: In SIG Node, 3 of the top 8 contributors with the highest decision impact (`tallclair` with 31 decisions, `ffromani` with 21, `thockin` with 20) are **not** on the official team leadership chart.
 - **Same gap in code review**: In each of the 5 teams we loaded, 5 or 6 of the top 8 PR reviewers are not that team's official leaders. `liggitt` (a SIG Auth lead) is a top-2 reviewer in all five.
-- **Decision Trail & Replacements**: Traces decisions across an 8-year evolution (e.g. *Coscheduling* (KEP-583, 2018) &rarr; *Gang Scheduling* (KEP-4671, 2025) &rarr; *Decouple PodGroup API* (KEP-5832, 2026)).
+- **Decision Trail & Replacements**: Traces decisions across an 8-year evolution (e.g. *Gang Scheduling* (KEP-4671, 2025) replaces both *Coscheduling* (KEP-583, 2018) and *Decouple PodGroup API* (KEP-5832, 2026), as its `kep.yaml` says).
 - **Stale Decision Catch**: Surfaces decisions marked `implementable` at alpha stage that have gone untouched for 8+ releases.
 - **Actionable Routing**: Triage incoming issues to the real experts and a person approves the draft before it is posted (`/api/route-issue/{n}` then `/api/approve`).
+
+### Official vs. actual: top 8 PR reviewers per team
+
+Score = REVIEWED + LGTM + APPROVED edges on the team's merged PRs (Oct 2025 – Oct 2026); ★ = official leader of that team.
+
+| # | sig-node | sig-scheduling | sig-auth | sig-storage | sig-network |
+|---|---|---|---|---|---|
+| 1 | liggitt 616 | macsko ★ 513 | liggitt ★ 506 | liggitt 177 | aojea ★ 177 |
+| 2 | SergeyKanzhelev ★ 461 | liggitt 390 | dims 104 | jsafrane ★ 128 | liggitt 175 |
+| 3 | pohly 303 | dom4ha ★ 185 | jpbetz 79 | xing-yang ★ 97 | danwinship ★ 145 |
+| 4 | dims 252 | pohly 143 | enj ★ 63 | dims 96 | dims 83 |
+| 5 | ffromani 135 | ania-borowiec 141 | soltysh 39 | gnufied ★ 70 | thockin ★ 42 |
+| 6 | tallclair 125 | dims 108 | pohly 38 | jpbetz 67 | jpbetz 41 |
+| 7 | haircommander ★ 123 | tosi3k 97 | thockin 33 | carlory 38 | sbangari 32 |
+| 8 | bart0sh 116 | mm4tt 90 | wojtek-t 33 | thockin 36 | Verolop 27 |
+| **not leaders** | **6 of 8** | **6 of 8** | **6 of 8** | **5 of 8** | **5 of 8** |
+
+---
+
+## ⚙️ How it works
+
+1. **Load** (`scripts/`): teams and leaders from `sigs.yaml`, design decisions from every `kep.yaml`, 12 months of
+   PRs and issues from the GitHub API, and official code owners from `OWNERS` files go into one FalkorDB graph, `k8s`.
+2. **Tools** (`app/tools.py`): five Cypher-backed tools: `who_owns`, `who_knows` (counts real evidence, can look
+   back in time with `as_of`), `why` (decision trail), `whats_stale` and `route_issue`. Each returns a summary,
+   the data, a small evidence map and source links.
+3. **Answer** (`app/agent.py`, `app/brain.py`): with an AI model configured, the agent picks the tools and writes
+   a cited answer. Without one, or if the model fails or hits its quota, Lore answers straight from the graph.
+4. **Show and act** (`web/index.html`): the chat page shows the answer, official owners vs. the people who do the
+   work, the evidence map and sources. For a new issue, a person reviews Lore's draft and approves posting it to
+   our practice repo; nothing is ever posted to real Kubernetes repos.
 
 ---
 
@@ -32,20 +66,17 @@ Every organization has two org charts:
 
 ### Option 1: Docker Compose (Recommended)
 
-1. **Clone the repository and switch to branch `server`**:
+1. **Clone the repository**:
    ```bash
    git clone https://github.com/Laimos-code/lore-company-brain.git
    cd lore-company-brain
-   git checkout server
    ```
 
 2. **Configure Environment Variables**:
    ```bash
    cp .env.example .env
-   # Edit .env with your LLM keys if running live agent:
-   # FALKORDB_HOST=falkordb
-   # FALKORDB_PORT=6379
-   # LLM_API_KEY=your_key_here
+   # All optional. LLM_API_KEY turns on the AI agent (without it Lore answers from the graph);
+   # DEMO_REPO + DEMO_GITHUB_TOKEN turn on Live Triage; set APPROVE_PASSCODE on a public server.
    ```
 
 3. **Start FalkorDB and the App**:
@@ -134,13 +165,13 @@ Run these from the repo root while FalkorDB is up. Downloads stay in `data/`, wh
 
 ## 🧠 Graph model (FalkorDB graph `k8s`)
 
-Counts from the full load on 2026-10-18: **6,852 nodes and 57,379 edges**.
+Counts from the full load on 2026-10-18: **6,849 nodes and 57,379 edges**.
 GitHub data: `kubernetes/kubernetes` PRs merged and issues created from 2025-10-18 to 2026-10-18 with a
 `sig/node`, `sig/scheduling`, `sig/auth`, `sig/storage` or `sig/network` label.
 
 | Node | Key properties | Count | Loaded by |
 | :--- | :--- | ---: | :--- |
-| `Person` | `login` (lowercase), `display` | 1,636 | every loader |
+| `Person` | `login` (lowercase), `display` | 1,633 | every loader |
 | `Team` | `key` (e.g. `sig-node`), `name`, `kind` | 52 | `load_k8s_brain.py` (`sigs.yaml`) |
 | `Subproject` | `name` | 240 | `load_k8s_brain.py` |
 | `KEP` | `num`, `title`, `status`, `stage`, `created`, `latest`, `path` (its folder in kubernetes/enhancements) | 679 | `load_k8s_brain.py` (`kep.yaml`) |
@@ -193,12 +224,30 @@ How to read it:
 - **`Folder`** is the first 3 folder levels of a changed file. Under `staging/src/` it's the 3 levels after that (e.g. `staging/src/k8s.io/kubelet/pkg`), so each staging library gets its own folders.
 - **`APPROVER_OF` / `REVIEWER_OF`** follow Prow's rules: the nearest OWNERS file plus its parents, stopping at `no_parent_owners`. `source` is the OWNERS file that lists the person, e.g. `pkg/scheduler/OWNERS`.
 
-Top PR reviewers of a team, marked if they are official leaders (`scripts/load_github.py` prints this for all 5 teams):
+### Example Cypher queries
+
+1. Top PR reviewers of a team, marked if they are official leaders (`scripts/load_github.py` prints this for all 5 teams):
 ```cypher
 MATCH (:Team {key:$team})<-[:FOR_TEAM]-(:PR)<-[e:REVIEWED|LGTM|APPROVED]-(p:Person)
 WITH p, count(e) AS total ORDER BY total DESC LIMIT 8
 OPTIONAL MATCH (p)-[:LEADS]->(lt:Team)
 RETURN p.display, total, $team IN collect(lt.key) AS official_leader ORDER BY total DESC
+```
+
+2. Official owners vs. who does the work in a code folder (`who_owns` / `who_knows`):
+```cypher
+MATCH (f:Folder {path:'pkg/kubelet/cm'})<-[:TOUCHES]-(pr:PR)<-[e:REVIEWED|LGTM|APPROVED]-(p:Person)
+WITH f, p, count(DISTINCT pr) AS prs ORDER BY prs DESC LIMIT 8
+OPTIONAL MATCH (p)-[a:APPROVER_OF]->(f)
+RETURN p.login, prs, a IS NOT NULL AS official_approver, a.source AS owners_file
+```
+
+3. Decision trail: what a KEP replaced and what replaced it (`why`):
+```cypher
+MATCH (k:KEP {num:'4671'})
+OPTIONAL MATCH (newer:KEP)-[:REPLACES*1..6]->(k)
+OPTIONAL MATCH (k)-[:REPLACES*1..6]->(older:KEP)
+RETURN k.title, collect(DISTINCT newer.num) AS replaced_by, collect(DISTINCT older.num) AS replaces
 ```
 
 ## ⚠️ Data quirks
@@ -208,8 +257,10 @@ RETURN p.display, total, $team IN collect(lt.key) AS official_leader ORDER BY to
 - The download keeps the first 100 changed files and 50 reviews of a PR; 74 PRs have more files and 74 more reviews.
 - `ASSIGNED` has no date: the download doesn't include when someone was assigned.
 - Files in the repo root (`go.mod`, `go.sum`, ...) have no `Folder`.
-- `liggit` (11 KEP links) is a typo for `liggitt` and is merged via `data/aliases.yaml`. More likely KEP typos
-  (e.g. `ligitt`, `saadali`, `gnuified`) are not merged yet: each needs a person to confirm it first.
+- Misspelled logins in KEP files are merged via `data/aliases.yaml` only after a check against the GitHub API
+  (the wrong name has no account, the right one is active in the same team): `liggit`, `gnuified`,
+  `mattcarry`, `sjennning`. Five other likely typos (`dnishi`, `jinxu97`, `ligitt`, `saadali`, `yujihong`)
+  are real, different accounts, so they are kept as they are.
 - In `OWNERS` files, every list under `filters:` is merged. So `staging/OWNERS`'s approvers for `go.mod`/`go.sum` count as approvers of every staging folder.
 
 ---
@@ -234,10 +285,9 @@ To host Lore on a small cloud server (DigitalOcean, AWS EC2, Hetzner, or GitHub 
    cd lore-company-brain
    docker compose up -d
    ```
-3. Load the data once:
-   ```bash
-   FALKORDB_HOST=127.0.0.1 FALKORDB_PORT=6379 python3 scripts/load_k8s_brain.py data/
-   ```
+3. Load the data once: run the three steps in [📥 Load the data](#-load-the-data) with
+   `FALKORDB_HOST=127.0.0.1` (FalkorDB needs about 11 MB of memory for the full graph; a dump is 1.5 MB).
+   Put the server's settings in `.env` (see `.env.example`), and set `APPROVE_PASSCODE` before going public.
 4. Set up HTTPS with Caddy (automatic Let's Encrypt certificates):
    ```caddy
    lore.yourdomain.com {
@@ -288,15 +338,30 @@ See [`docs/tool_contract.md`](docs/tool_contract.md) for full JSON request and r
 
 ## 🧪 Testing
 
-Run automated tests:
 ```bash
-pytest -o pythonpath=. tests/test_server.py
+pytest -o pythonpath=. tests/
 ```
-All 6 tests verify page serving, FalkorDB health ping, verified stub response, decision trails, rate limiting enforcement, and approve action flows.
+49 tests: the server and its safety limits (`test_server.py`), the agent's tool loop with a scripted fake model
+(`test_agent.py`; no test calls a real AI model), and the graph tools on the real graph (`test_tools.py`; contract
+in [`docs/tool_contract.md`](docs/tool_contract.md) section 4). The graph tests skip themselves until all three
+loaders in [📥 Load the data](#-load-the-data) have run.
 
-The graph tools (`app/tools.py`: `who_owns`, `who_knows`, `why`, `whats_stale`, `route_issue`; contract in
-[`docs/tool_contract.md`](docs/tool_contract.md) section 4) are tested on the real graph. These tests skip
-themselves until all three loaders in [📥 Load the data](#-load-the-data) have run:
-```bash
-pytest -o pythonpath=. tests/test_tools.py
-```
+---
+
+## 📚 Data sources and licences
+
+| Data | Source | Licence |
+| :--- | :--- | :--- |
+| Teams, leaders, subprojects | [`kubernetes/community`](https://github.com/kubernetes/community) `sigs.yaml` | Apache-2.0 |
+| Design decisions (KEPs) | [`kubernetes/enhancements`](https://github.com/kubernetes/enhancements) `kep.yaml` files | Apache-2.0 |
+| Official code owners | [`kubernetes/kubernetes`](https://github.com/kubernetes/kubernetes) `OWNERS` / `OWNERS_ALIASES` | Apache-2.0 |
+| PRs, reviews, issues | GitHub GraphQL API, public `kubernetes/kubernetes` data | GitHub Terms of Service |
+
+Only public GitHub logins and public work activity are stored: no emails, names, employers or comment text.
+Lore's own code is MIT-licensed (`LICENSE`).
+
+## 🤖 AI usage
+
+Parts of this project were written with help from an AI coding assistant. Every change was read, run and
+tested by the team before it was committed; the evaluation numbers come from our own scripts. Details in
+[`AI_USAGE.md`](AI_USAGE.md).
