@@ -119,7 +119,7 @@ def get_client_ip(request: Request) -> str:
 
 # ── Models ──────────────────────────────────────────────────────────
 class AskRequest(BaseModel):
-    question: str = Field(..., min_length=1, description="Question about Kubernetes teams, decisions, or ownership")
+    question: str = Field(..., min_length=1, max_length=2000, description="Question about Kubernetes teams, decisions, or ownership")
 
 
 # ── FalkorDB Health Check Helper ────────────────────────────────────
@@ -290,15 +290,13 @@ async def ask_brain(req: AskRequest, request: Request) -> JSONResponse:
             # Wait with a strict 60-second deadline
             result = await asyncio.wait_for(coro, timeout=60.0)
     except asyncio.TimeoutError:
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Agent execution timed out after 60 seconds."},
-        )
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Agent execution failed: {str(e)}"},
-        )
+        # The model was too slow: log it and answer from the graph below instead of failing.
+        logging.warning("Agent timed out after 60 s; answering from the graph instead")
+        result = None
+    except Exception:
+        # Bad key, rate limit, provider down...: log it and answer from the graph below.
+        logging.exception("Agent failed; answering from the graph instead")
+        result = None
 
     # 3. No LLM agent: answer straight from the graph; stub only if FalkorDB is unreachable
     if result is None:
@@ -308,6 +306,7 @@ async def ask_brain(req: AskRequest, request: Request) -> JSONResponse:
         except Exception:
             logging.exception("Graph answer failed; serving the stub")
             result = None
+
     if result is None:
         result = get_stub_response(question)
 

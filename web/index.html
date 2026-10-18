@@ -436,6 +436,42 @@
       box-shadow: 0 0 6px var(--accent);
     }
 
+    /* Evidence Graph Map */
+    .evidence-map-card {
+      margin-top: 1.25rem;
+      padding: 1.25rem;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 14px;
+      border: 1px solid var(--card-border);
+    }
+
+    .evidence-map-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+
+    .evidence-map-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #38bdf8;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    #evidence-graph-container {
+      width: 100%;
+      height: 380px;
+      background: radial-gradient(circle at center, rgba(30, 41, 59, 0.5) 0%, rgba(15, 23, 42, 0.9) 100%);
+      border-radius: 10px;
+      border: 1px solid var(--card-border);
+      position: relative;
+      overflow: hidden;
+    }
+
     /* Sources and Action Row */
     .bottom-bar {
       margin-top: 1.5rem;
@@ -600,6 +636,20 @@
           </div>
         </div>
 
+        <!-- Evidence Map (Graph Visualization) -->
+        <div class="evidence-map-card" id="evidence-map-view" style="display: none;">
+          <div class="evidence-map-header">
+            <div class="evidence-map-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+              <span>Evidence Graph Map</span>
+            </div>
+            <span id="evidence-stats" style="font-size: 0.75rem; color: var(--text-dim); font-family: var(--mono);"></span>
+          </div>
+          <div id="evidence-graph-container">
+            <svg id="evidence-svg" style="width: 100%; height: 100%;"></svg>
+          </div>
+        </div>
+
         <!-- Decision Trail Timeline (if present) -->
         <div class="timeline-card" id="timeline-view" style="display: none;">
           <div class="timeline-title">Decision Trail & Replacements Lineage</div>
@@ -740,11 +790,16 @@
           li.append(el('span', 'person-name', '@' + o.login), el('span', 'person-role', o.role || 'official lead'));
           ownersList.appendChild(li);
         });
+
       } else {
-        ownersList.innerHTML = '<li class="person-row" style="color:var(--text-dim)">No official leaders listed.</li>';
+        const li = document.createElement('li');
+        li.className = 'person-row';
+        li.style.color = 'var(--text-dim)';
+        li.textContent = 'No official leaders listed.';
+        ownersList.appendChild(li);
       }
 
-      // Render Knowers
+      // Render Knowers safely
       knowersList.innerHTML = '';
       if (data.actual_knowers && data.actual_knowers.length) {
         data.actual_knowers.forEach(k => {
@@ -758,10 +813,14 @@
           knowersList.appendChild(li);
         });
       } else {
-        knowersList.innerHTML = '<li class="person-row" style="color:var(--text-dim)">No decision evidence recorded.</li>';
+        const li = document.createElement('li');
+        li.className = 'person-row';
+        li.style.color = 'var(--text-dim)';
+        li.textContent = 'No decision evidence recorded.';
+        knowersList.appendChild(li);
       }
 
-      // Decision Trail Timeline
+      // Decision Trail Timeline safely
       if (data.decision_trail && data.decision_trail.length) {
         timelineView.style.display = 'block';
         timelineSteps.innerHTML = '';
@@ -772,20 +831,185 @@
           div.append(el('strong', null, `${d.kep} (${d.title})`), ' • ', meta);
           timelineSteps.appendChild(div);
         });
+
       } else {
         timelineView.style.display = 'none';
       }
 
-      // Sources
+      // Sources safely with links and [n] prefix
       sourcesContainer.innerHTML = '';
       if (data.sources && data.sources.length) {
         data.sources.forEach(s => {
-          const span = document.createElement('span');
-          span.className = 'source-tag';
-          span.textContent = `${s.type}: ${s.ref} (${s.title})`;
-          sourcesContainer.appendChild(span);
+          const tag = s.url ? document.createElement('a') : document.createElement('span');
+          tag.className = 'source-tag';
+          if (s.url) {
+            tag.href = s.url;
+            tag.target = '_blank';
+            tag.rel = 'noopener noreferrer';
+            tag.style.textDecoration = 'none';
+          }
+          const numPrefix = s.n != null ? `[${s.n}] ` : '';
+          const typeRef = s.type && s.ref ? `${s.type}: ${s.ref}` : (s.ref || s.title || 'Source');
+          tag.textContent = `${numPrefix}${typeRef} (${s.title})`;
+          sourcesContainer.appendChild(tag);
         });
       }
+
+      // Render Evidence Graph Map
+      if (data.evidence && data.evidence.nodes && data.evidence.nodes.length) {
+        renderEvidenceMap(data.evidence);
+      } else if (data.graph && data.graph.nodes && data.graph.nodes.length) {
+        renderEvidenceMap(data.graph);
+      } else {
+        const evView = document.getElementById('evidence-map-view');
+        if (evView) evView.style.display = 'none';
+      }
+    }
+
+    function renderEvidenceMap(evidence) {
+      const evView = document.getElementById('evidence-map-view');
+      const stats = document.getElementById('evidence-stats');
+      const svg = document.getElementById('evidence-svg');
+      const container = document.getElementById('evidence-graph-container');
+
+      if (!evidence || !evidence.nodes || !evidence.nodes.length) {
+        if (evView) evView.style.display = 'none';
+        return;
+      }
+
+      evView.style.display = 'block';
+      if (stats) stats.textContent = `${evidence.nodes.length} nodes · ${evidence.edges ? evidence.edges.length : 0} edges`;
+
+      const width = container.clientWidth || 800;
+      const height = container.clientHeight || 380;
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      svg.innerHTML = '';
+
+      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+      defs.innerHTML = `
+        <marker id="arrow" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" />
+        </marker>
+        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="3" result="blur" />
+          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+      `;
+      svg.appendChild(defs);
+
+      const typeColors = {
+        'Team': { fill: '#6366f1', stroke: '#818cf8', text: '#e0e7ff' },
+        'Person': { fill: '#10b981', stroke: '#34d399', text: '#d1fae5' },
+        'KEP': { fill: '#f59e0b', stroke: '#fbbf24', text: '#fef3c7' },
+        'FeatureGate': { fill: '#a855f7', stroke: '#c084fc', text: '#f3e8ff' },
+        'Folder': { fill: '#f43f5e', stroke: '#fb7185', text: '#ffe4e6' },
+        'PR': { fill: '#38bdf8', stroke: '#7dd3fc', text: '#e0f2fe' }
+      };
+
+      const nodes = evidence.nodes;
+      const edges = evidence.edges || [];
+      const nodeMap = {};
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const radius = Math.min(width, height) * 0.38;
+
+      nodes.forEach((n, idx) => {
+        const angle = (idx / nodes.length) * 2 * Math.PI;
+        let r = radius;
+        if (n.type === 'Team') r = radius * 0.35;
+        else if (n.type === 'Person') r = radius * 0.75;
+
+        nodeMap[n.id] = {
+          ...n,
+          x: centerX + r * Math.cos(angle) + (Math.random() - 0.5) * 15,
+          y: centerY + r * Math.sin(angle) + (Math.random() - 0.5) * 15,
+        };
+      });
+
+      for (let iter = 0; iter < 25; iter++) {
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const n1 = nodeMap[nodes[i].id];
+            const n2 = nodeMap[nodes[j].id];
+            const dx = n2.x - n1.x;
+            const dy = n2.y - n1.y;
+            const dist = Math.hypot(dx, dy) || 1;
+            if (dist < 65) {
+              const force = (65 - dist) / dist * 0.2;
+              n1.x -= dx * force;
+              n1.y -= dy * force;
+              n2.x += dx * force;
+              n2.y += dy * force;
+            }
+          }
+        }
+      }
+
+      const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      edges.forEach(e => {
+        const src = nodeMap[e.source];
+        const tgt = nodeMap[e.target];
+        if (!src || !tgt) return;
+
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', src.x);
+        line.setAttribute('y1', src.y);
+        line.setAttribute('x2', tgt.x);
+        line.setAttribute('y2', tgt.y);
+        line.setAttribute('stroke', 'rgba(148, 163, 184, 0.45)');
+        line.setAttribute('stroke-width', '1.5');
+        line.setAttribute('marker-end', 'url(#arrow)');
+        edgeGroup.appendChild(line);
+
+        if (e.relation) {
+          const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          text.setAttribute('x', (src.x + tgt.x) / 2);
+          text.setAttribute('y', (src.y + tgt.y) / 2 - 3);
+          text.setAttribute('fill', '#94a3b8');
+          text.setAttribute('font-size', '9px');
+          text.setAttribute('font-family', 'var(--mono)');
+          text.setAttribute('text-anchor', 'middle');
+          text.textContent = e.relation;
+          edgeGroup.appendChild(text);
+        }
+      });
+      svg.appendChild(edgeGroup);
+
+      const nodeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      nodes.forEach(n => {
+        const pos = nodeMap[n.id];
+        const style = typeColors[n.type] || { fill: '#64748b', stroke: '#94a3b8', text: '#f8fafc' };
+
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+        g.style.cursor = 'pointer';
+
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('r', n.type === 'Team' ? '18' : '14');
+        circle.setAttribute('fill', style.fill);
+        circle.setAttribute('stroke', style.stroke);
+        circle.setAttribute('stroke-width', '2');
+        circle.setAttribute('filter', 'url(#glow)');
+        g.appendChild(circle);
+
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('y', n.type === 'Team' ? '30' : '26');
+        label.setAttribute('fill', style.text);
+        label.setAttribute('font-size', '11px');
+        label.setAttribute('font-family', 'var(--mono)');
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('font-weight', '500');
+        const displayText = n.label || n.id.split(':').pop();
+        label.textContent = displayText.length > 18 ? displayText.slice(0, 16) + '…' : displayText;
+        g.appendChild(label);
+
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.textContent = `${n.type}: ${n.label || n.id} (${n.status || ''})`;
+        g.appendChild(title);
+
+        nodeGroup.appendChild(g);
+      });
+      svg.appendChild(nodeGroup);
     }
 
     // Example question pills click

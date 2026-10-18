@@ -8,6 +8,20 @@ from app.main import app, rate_limiter
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def no_llm_key(monkeypatch):
+    """Server tests never call a real AI model, even when .env has an LLM_API_KEY."""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+
+def _falkor_up():
+    try:
+        from app import tools
+        return bool(tools._q("MATCH (t:Team) RETURN count(t)")[0][0])
+    except Exception:
+        return False
+
+
 def test_index_page():
     """Verify GET / returns the frontend HTML."""
     response = client.get("/")
@@ -46,6 +60,40 @@ def test_ask_decision_trail():
     assert data.get("is_stub") is (not _falkor_up())
 
 
+def test_ask_without_llm_key():
+    """With no LLM_API_KEY, POST /api/ask returns 200 (graph answer or stub), never 500."""
+    response = client.post("/api/ask", json={"question": "Who actually knows SIG Node?"})
+    assert response.status_code == 200
+    data = response.json()
+    assert "answer" in data
+
+
+def test_ask_rejects_question_over_2000_chars():
+    """Questions longer than 2000 characters are rejected with 422 Unprocessable Entity."""
+    long_q = "Who owns SIG Node? " * 150  # > 2800 chars
+    response = client.post("/api/ask", json={"question": long_q})
+    assert response.status_code == 422
+
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("Connection error."), TimeoutError()])
+def test_ask_falls_back_to_graph_when_agent_fails(monkeypatch, failure):
+    """If the AI model fails (bad key, rate limit, outage, too slow), /api/ask still answers
+    from the graph (or the stub if the graph is down) instead of returning 500."""
+    from app import agent
+
+    def failing_ask(question):
+        raise failure
+
+    monkeypatch.setattr(agent, "ask", failing_ask)
+    monkeypatch.setenv("LLM_API_KEY", "real-looking-key")
+    resp = client.post("/api/ask", json={"question": "Who actually knows SIG Node?"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "answer" in data
+    assert "error" not in data
+
+
 def test_ask_rate_limiting(monkeypatch):
     """Verify rate limiter blocks client after 20 queries in a minute (behind our proxy)."""
     monkeypatch.setattr(main, "TRUST_PROXY", True)
@@ -77,6 +125,7 @@ def test_rate_limit_ignores_fake_forwarded_header():
     ]
     assert codes[:20] == [200] * 20
     assert codes[20] == 429
+
 
 
 def test_action_approve_endpoint():
