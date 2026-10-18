@@ -20,7 +20,9 @@ ENV/
 *.db
 *.db*
 k8s_brain.db*
-data/
+# Raw downloads stay local; only the small, hand-made alias list is shared.
+data/*
+!data/aliases.yaml
 
 # OS specific
 .DS_Store
