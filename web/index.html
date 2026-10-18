@@ -616,6 +616,25 @@
         </div>
       </div>
     </section>
+
+    <!-- Live Triage: Lore suggests, a human approves, GitHub gets the comment -->
+    <section id="triage" class="search-card" style="margin-top: 1.5rem;">
+      <div class="answer-title" style="margin-bottom: 0.75rem;"><span>Live Triage (human-approved GitHub action)</span></div>
+      <div class="search-row">
+        <select id="triage-issue" class="search-input"><option>Loading practice issues...</option></select>
+        <button id="triage-route-btn" class="ask-btn"><span>Route with Lore</span></button>
+      </div>
+      <div id="triage-result" style="display:none; margin-top: 1rem;">
+        <div id="triage-summary" class="answer-body"></div>
+        <ul id="triage-reviewers" class="person-list"></ul>
+        <textarea id="triage-comment" class="search-input" rows="9" maxlength="2000" style="width:100%; margin-top:0.75rem; font-family:inherit;"></textarea>
+        <div class="bottom-bar">
+          <span id="triage-labels" class="sources-list"></span>
+          <button id="triage-approve-btn" class="approve-action-btn"><span>Approve &amp; post to GitHub</span></button>
+        </div>
+        <div id="triage-posted" class="answer-body" style="margin-top:0.5rem;"></div>
+      </div>
+    </section>
   </main>
 
   <div id="toast">
@@ -705,16 +724,20 @@
 
       stubIndicator.style.display = data.is_stub ? 'inline-block' : 'none';
 
+      // Names, titles and roles come from the graph, so rows are built with textContent, never as HTML.
+      function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      }
+
       // Render Owners
       ownersList.innerHTML = '';
       if (data.official_owners && data.official_owners.length) {
         data.official_owners.forEach(o => {
-          const li = document.createElement('li');
-          li.className = 'person-row';
-          li.innerHTML = `
-            <span class="person-name">@${o.login}</span>
-            <span class="person-role">${o.role || 'official lead'}</span>
-          `;
+          const li = el('li', 'person-row');
+          li.append(el('span', 'person-name', '@' + o.login), el('span', 'person-role', o.role || 'official lead'));
           ownersList.appendChild(li);
         });
       } else {
@@ -725,15 +748,13 @@
       knowersList.innerHTML = '';
       if (data.actual_knowers && data.actual_knowers.length) {
         data.actual_knowers.forEach(k => {
-          const li = document.createElement('li');
-          li.className = 'person-row';
-          const badge = !k.is_official 
-            ? '<span class="hidden-knower-badge">Not on Org Chart</span>' 
-            : '<span style="font-size:0.75rem; color:var(--text-dim)">Official</span>';
-          li.innerHTML = `
-            <span class="person-name">@${k.login} ${badge}</span>
-            <span class="person-role">${k.decisions_count ? k.decisions_count + ' decisions' : 'expert'}</span>
-          `;
+          const li = el('li', 'person-row');
+          const name = el('span', 'person-name', '@' + k.login + ' ');
+          const badge = k.is_official ? el('span', null, 'Official') : el('span', 'hidden-knower-badge', 'Not on Org Chart');
+          if (k.is_official) badge.style.cssText = 'font-size:0.75rem; color:var(--text-dim)';
+          name.appendChild(badge);
+          // decisions_count = KEP decisions plus PR work (authored / reviewed / lgtm / approved)
+          li.append(name, el('span', 'person-role', k.decisions_count ? k.decisions_count + ' decisions & PRs' : 'expert'));
           knowersList.appendChild(li);
         });
       } else {
@@ -745,9 +766,10 @@
         timelineView.style.display = 'block';
         timelineSteps.innerHTML = '';
         data.decision_trail.forEach(d => {
-          const div = document.createElement('div');
-          div.className = 'timeline-step';
-          div.innerHTML = `<strong>${d.kep} (${d.title})</strong> &bull; <span style="color:var(--text-muted); font-size:0.8rem;">${d.date} [${d.status}]</span>`;
+          const div = el('div', 'timeline-step');
+          const meta = el('span', null, `${d.date} [${d.status}]`);
+          meta.style.cssText = 'color:var(--text-muted); font-size:0.8rem;';
+          div.append(el('strong', null, `${d.kep} (${d.title})`), ' • ', meta);
           timelineSteps.appendChild(div);
         });
       } else {
@@ -781,36 +803,96 @@
     });
 
     // Approve Button Action (Team Member C's Action Router)
-    approveBtn.addEventListener('click', async () => {
-      approveBtn.disabled = true;
+    approveBtn.addEventListener('click', () => {
+      document.getElementById('triage').scrollIntoView({ behavior: 'smooth' });
+    });
+
+
+    // Live Triage flow: GET /api/demo-issues -> GET /api/route-issue/{n} -> human edits -> POST /api/approve
+    const triageSelect = document.getElementById('triage-issue');
+    const triageRouteBtn = document.getElementById('triage-route-btn');
+    const triageResult = document.getElementById('triage-result');
+    const triageComment = document.getElementById('triage-comment');
+    const triageApproveBtn = document.getElementById('triage-approve-btn');
+    let triageLabels = [];
+    function triagePasscode() {
+      return sessionStorage.getItem('lore-approve-passcode') || '';
+    }
+
+    async function loadDemoIssues() {
       try {
-        const payload = {
-          action_id: 'act_' + Date.now(),
-          action_type: 'route_issue',
-          target_team: 'sig-node',
-          suggested_assignees: ['tallclair', 'dchen1107'],
-          comment_draft: 'Issue verified. Routing to @sig-node-leads. Based on decision graph history, @tallclair and @dchen1107 are the primary subject matter experts.',
-          approved_by: 'lead_maintainer'
-        };
-
-        const res = await fetch('/api/actions/approve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+        const res = await fetch('/api/demo-issues');
+        const data = await res.json();
+        triageSelect.innerHTML = '';
+        if (!Array.isArray(data)) throw new Error(data.error || 'unavailable');
+        data.forEach(i => {
+          const opt = document.createElement('option');
+          opt.value = i.number; opt.textContent = `#${i.number} ${i.title}`;
+          triageSelect.appendChild(opt);
         });
-
-        if (res.ok) {
-          const data = await res.json();
-          showToast(data.message || 'Action successfully approved and queued!');
-        } else {
-          showToast('Approval action failed.');
-        }
       } catch (err) {
-        showToast('Error sending approval: ' + err.message);
+        triageSelect.innerHTML = '<option>Practice repo not configured</option>';
+      }
+    }
+
+    triageRouteBtn.addEventListener('click', async () => {
+      triageRouteBtn.disabled = true;
+      document.getElementById('triage-posted').textContent = '';
+      try {
+        const res = await fetch('/api/route-issue/' + encodeURIComponent(triageSelect.value));
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+        triageResult.style.display = 'block';
+        const votes = (data.team_scores || []).map(t => `${t.team} ${t.score}`).join(', ');
+        document.getElementById('triage-summary').textContent =
+          `Suggested team: ${data.team || 'none'}  (graph scores: ${votes})`;
+        const ul = document.getElementById('triage-reviewers');
+        ul.innerHTML = '';
+        (data.people || []).forEach(p => {
+          const li = document.createElement('li');
+          li.className = 'person-row';
+          li.textContent = `${p.display || p.login}: ${p.reason || ''}`;
+          ul.appendChild(li);
+        });
+        triageLabels = data.labels || [];
+        document.getElementById('triage-labels').textContent = 'Labels: ' + triageLabels.concat(['triage/lore-suggested']).join(', ');
+        triageComment.value = data.comment || '';
+      } catch (err) {
+        showToast('Routing failed: ' + err.message);
       } finally {
-        approveBtn.disabled = false;
+        triageRouteBtn.disabled = false;
       }
     });
+
+    triageApproveBtn.addEventListener('click', async () => {
+      triageApproveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Approve-Passcode': triagePasscode() },
+          body: JSON.stringify({ issue_number: Number(triageSelect.value), comment: triageComment.value, labels: triageLabels })
+        });
+        const data = await res.json();
+        if (res.status === 403) {
+          const code = prompt('Approve passcode:');
+          if (code) sessionStorage.setItem('lore-approve-passcode', code);
+          throw new Error(data.error);
+        }
+        if (!data.ok) throw new Error(data.error);
+        const out = document.getElementById('triage-posted');
+        out.innerHTML = '';
+        const a = document.createElement('a');
+        a.href = data.comment_url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Posted on GitHub: ' + data.comment_url;
+        out.appendChild(a);
+        showToast('Approved and posted to GitHub.');
+      } catch (err) {
+        showToast('Approve failed: ' + err.message);
+      } finally {
+        triageApproveBtn.disabled = false;
+      }
+    });
+
+    loadDemoIssues();
 
     function showToast(msg) {
       toastMsg.textContent = msg;

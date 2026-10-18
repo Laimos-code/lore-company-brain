@@ -5,7 +5,9 @@ Endpoints:
 - POST /api/ask     -> Queries AI agent (or stub) with timeout & 20 req/min rate limit
 - GET  /api/health  -> Returns {"ok": true, "falkordb": true/false} via RETURN 1
 - /api/actions      -> Router from app/actions.py (Approve button action)
+- GET  /api/demo-issues, POST /api/approve -> GitHub demo triage (app/actions.py)
 """
+import logging
 import asyncio
 from collections import defaultdict
 import os
@@ -47,8 +49,10 @@ app = FastAPI(
 # Enable CORS for browser integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    # ALLOWED_ORIGINS: comma-separated sites allowed to call the API from a browser (default: none,
+    # i.e. only the page this server serves itself).
+    allow_origins=[o.strip() for o in (os.getenv("ALLOWED_ORIGINS") or "").split(",") if o.strip()],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -57,6 +61,7 @@ app.add_middleware(
 try:
     from app import actions
     app.include_router(actions.router)
+    app.include_router(actions.demo_router)
 except ImportError:
     # Graceful fallback if actions is being worked on
     from fastapi import APIRouter
@@ -295,7 +300,14 @@ async def ask_brain(req: AskRequest, request: Request) -> JSONResponse:
             content={"error": f"Agent execution failed: {str(e)}"},
         )
 
-    # 3. Fallback to stub contract if agent returned None or is in progress
+    # 3. No LLM agent: answer straight from the graph; stub only if FalkorDB is unreachable
+    if result is None:
+        try:
+            from app import brain
+            result = await asyncio.wait_for(asyncio.to_thread(brain.answer, question), timeout=30.0)
+        except Exception:
+            logging.exception("Graph answer failed; serving the stub")
+            result = None
     if result is None:
         result = get_stub_response(question)
 
