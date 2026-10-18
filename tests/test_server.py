@@ -8,6 +8,12 @@ from app.main import app, rate_limiter
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def stub_environment(monkeypatch):
+    """Ensure server unit tests run with USE_STUBS=1."""
+    monkeypatch.setenv("USE_STUBS", "1")
+
+
 def test_index_page():
     """Verify GET / returns the frontend HTML."""
     response = client.get("/")

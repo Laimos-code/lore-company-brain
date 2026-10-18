@@ -274,7 +274,9 @@ async def ask_brain(req: AskRequest, request: Request) -> JSONResponse:
     # 2. Invoke Agent with a 60-second timeout guard
     result = None
     try:
-        if agent and hasattr(agent, "ask") and callable(agent.ask):
+        if os.getenv("USE_STUBS") == "1":
+            result = get_stub_response(question)
+        elif agent and hasattr(agent, "ask") and callable(agent.ask):
             import inspect
             # Check if ask is an async coroutine or synchronous function
             if inspect.iscoroutinefunction(agent.ask):
