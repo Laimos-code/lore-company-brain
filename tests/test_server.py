@@ -8,6 +8,12 @@ from app.main import app, rate_limiter
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def no_llm_key(monkeypatch):
+    """Server tests never call a real AI model, even when .env has an LLM_API_KEY."""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+
 def _falkor_up():
     try:
         from app import tools
@@ -33,9 +39,8 @@ def test_health_endpoint():
     assert isinstance(data["falkordb"], bool)
 
 
-def test_ask_endpoint_stub_response(monkeypatch):
+def test_ask_endpoint_stub_response():
     """Verify POST /api/ask returns the contract shape (graph answer, or stub if FalkorDB is down)."""
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
     response = client.post("/api/ask", json={"question": "Who actually knows SIG Node?"})
     assert response.status_code == 200
     data = response.json()
@@ -46,9 +51,8 @@ def test_ask_endpoint_stub_response(monkeypatch):
     assert data.get("is_stub") is (not _falkor_up())
 
 
-def test_ask_decision_trail(monkeypatch):
+def test_ask_decision_trail():
     """Verify POST /api/ask returns decision trail for gang scheduling."""
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
     response = client.post("/api/ask", json={"question": "Why did they choose gang scheduling?"})
     assert response.status_code == 200
     data = response.json()
@@ -56,19 +60,34 @@ def test_ask_decision_trail(monkeypatch):
     assert data.get("is_stub") is (not _falkor_up())
 
 
-def test_ask_without_llm_key(monkeypatch):
+def test_ask_without_llm_key():
     """With no LLM_API_KEY, POST /api/ask returns 200 (graph answer or stub), never 500."""
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
     response = client.post("/api/ask", json={"question": "Who actually knows SIG Node?"})
     assert response.status_code == 200
     data = response.json()
     assert "answer" in data
 
 
+@pytest.mark.parametrize("failure", [RuntimeError("Connection error."), TimeoutError()])
+def test_ask_falls_back_to_graph_when_agent_fails(monkeypatch, failure):
+    """If the AI model fails (bad key, rate limit, outage, too slow), /api/ask still answers
+    from the graph (or the stub if the graph is down) instead of returning 500."""
+    from app import agent
+
+    def failing_ask(question):
+        raise failure
+
+    monkeypatch.setattr(agent, "ask", failing_ask)
+    monkeypatch.setenv("LLM_API_KEY", "real-looking-key")
+    resp = client.post("/api/ask", json={"question": "Who actually knows SIG Node?"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "answer" in data
+    assert "error" not in data
+
 
 def test_ask_rate_limiting(monkeypatch):
     """Verify rate limiter blocks client after 20 queries in a minute (behind our proxy)."""
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.setattr(main, "TRUST_PROXY", True)
     client_ip = "192.168.1.99"
     headers = {"x-forwarded-for": client_ip}
@@ -88,9 +107,8 @@ def test_ask_rate_limiting(monkeypatch):
     assert "Rate limit exceeded" in err.get("error", "")
 
 
-def test_rate_limit_ignores_fake_forwarded_header(monkeypatch):
+def test_rate_limit_ignores_fake_forwarded_header():
     """A visitor can't dodge the limit by sending a different fake IP each time."""
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
     rate_limiter.requests.clear()
     codes = [
         client.post("/api/ask", json={"question": f"Q{i}"},
@@ -99,6 +117,7 @@ def test_rate_limit_ignores_fake_forwarded_header(monkeypatch):
     ]
     assert codes[:20] == [200] * 20
     assert codes[20] == 429
+
 
 
 def test_action_approve_endpoint():
