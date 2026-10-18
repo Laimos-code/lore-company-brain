@@ -2,7 +2,7 @@
 
 <p align="center"><b>Lore is a company brain on a FalkorDB graph: it shows who officially owns a part of Kubernetes, who really does the work, and why decisions were made, with a source for every claim.</b></p>
 
-<p align="center"><a href="https://lore-company-brain.onrender.com">Live demo</a> · <a href="DEMO_VIDEO_LINK">Demo video</a> · <a href="#run-locally">Run locally</a></p>
+<p align="center"><a href="https://lore-company-brain.onrender.com">Live demo</a> · <a href="https://youtu.be/EXb_rKqiyMM">Demo video</a> · <a href="#run-locally">Run locally</a></p>
 
 <p align="center"><img src="https://github.com/user-attachments/assets/6b42cb72-be06-47ac-a68a-e83a8423ebef" width="760"><br><i>"Who really works on sig-scheduling?": the 3 official leaders next to the people who do the work, with the evidence map.</i></p>
 
