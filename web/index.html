@@ -657,7 +657,31 @@ function buildMap(evidence) {
       userZoomingEnabled: false, userPanningEnabled: false, boxSelectionEnabled: false,
       minZoom: 0.4, maxZoom: 1.15, autoungrabify: false
     });
-    const fit = () => { cy.resize(); cy.layout(pickLayout(cy)).run(); cy.fit(undefined, 30); };
+    /* In a wide row of labels, push neighbours onto different lines so no two labels overlap. */
+    const staggerLabels = () => {
+      cy.nodes().forEach((n) => n.removeStyle("text-margin-y"));
+      const rows = {};
+      cy.nodes().forEach((n) => { const k = Math.round(n.renderedPosition("y") / 10); (rows[k] = rows[k] || []).push(n); });
+      Object.values(rows).forEach((row) => {
+        row.sort((a, b) => a.renderedPosition("x") - b.renderedPosition("x"));
+        const lanes = [];
+        row.forEach((n) => {
+          const w = Math.min(labelWidth, 6.6 * String(n.data("label")).length);
+          const x = n.renderedPosition("x");
+          let lane = lanes.findIndex((edge) => x - w / 2 > edge + 6);
+          if (lane === -1) { lane = lanes.length; lanes.push(0); }
+          lanes[lane] = x + w / 2;
+          if (lane > 0) n.style("text-margin-y", 5 + lane * 13);
+        });
+      });
+    };
+    const fit = () => {
+      cy.resize();
+      const layout = pickLayout(cy);
+      cy.layout(layout).run();
+      cy.fit(undefined, 30);
+      if (layout.name !== "preset") staggerLabels();
+    };
     fit();
     const focus = (n) => { cy.elements().addClass("dim"); n.closedNeighborhood().removeClass("dim").addClass("hl"); };
     const clear = () => cy.elements().removeClass("dim hl");
