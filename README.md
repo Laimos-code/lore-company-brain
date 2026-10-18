@@ -256,7 +256,13 @@ author. Lore only sees evidence dated before the cutoff. hit@k = share of test P
 the top k suggestions really reviewed, `/lgtm`-ed or `/approve`-d it. This is the scope of the number, not an
 overall accuracy claim. Caveat: OWNERS files are today's, not the ones in force at the cutoff.
 
-EVAL_TABLE
+| Method (446 test PRs) | hit@1 | hit@3 | hit@5 |
+| :--- | ---: | ---: | ---: |
+| **Lore** (`_knowers` on touched folders, then team) | 49% | 76% | 85% |
+| Busiest reviewers before cutoff | 20% | 43% | 57% |
+| Random OWNERS approvers of touched folders | 6% | 16% | 27% |
+| Random OWNERS approvers + reviewers | 4% | 13% | 21% |
+| Random official SIG leads of the PR's team | 12% | 34% | 45% |
 
 Raw output: [`docs/eval_reviewers.json`](docs/eval_reviewers.json).
 

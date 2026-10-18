@@ -34,7 +34,7 @@ def test_ask_endpoint_stub_response():
     assert "official_owners" in data
     assert "actual_knowers" in data
     assert "sources" in data
-    assert data.get("is_stub") is (not _graph_loaded())
+    assert data.get("is_stub") is (not _falkor_up())
 
 
 def test_ask_decision_trail():
@@ -43,7 +43,7 @@ def test_ask_decision_trail():
     assert response.status_code == 200
     data = response.json()
     assert "decision_trail" in data or "answer" in data
-    assert data.get("is_stub") is (not _graph_loaded())
+    assert data.get("is_stub") is (not _falkor_up())
 
 
 def test_ask_rate_limiting(monkeypatch):
@@ -117,6 +117,14 @@ def test_demo_approve_rejects_bad_label_and_long_comment(monkeypatch):
     assert too_long.status_code == 400 and too_long.json()["ok"] is False
 
 
+def _falkor_up():
+    try:
+        from app import tools
+        return bool(tools._q("MATCH (t:Team) RETURN count(t)")[0][0])
+    except Exception:
+        return False
+
+
 def _graph_loaded():
     try:
         from app import tools
@@ -129,6 +137,7 @@ def test_ask_is_real_when_graph_loaded():
     """With the graph loaded, /api/ask must answer from Cypher, never the stub."""
     if not _graph_loaded():
         pytest.skip("graph not loaded")
+    rate_limiter.requests.clear()
     for q, tool in [("Who actually knows SIG Node?", "who_knows"),
                     ("Why did they choose gang scheduling?", "why"),
                     ("What decisions are stuck at alpha?", "whats_stale")]:
