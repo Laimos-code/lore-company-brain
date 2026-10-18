@@ -252,14 +252,15 @@ To host Lore on a small cloud server (DigitalOcean, AWS EC2, Hetzner, or GitHub 
 
 `FALKORDB_HOST=localhost python scripts/eval_reviewers.py 2026-08-01` reads everything from the graph.
 Test set: merged PRs of the 5 slice teams with `merged >= 2026-08-01` that have a reviewer other than the
-author. Lore only sees evidence dated before the cutoff. hit@k = share of test PRs where at least one of
+author. No peeking: for each test PR, Lore only sees evidence dated before the day that PR was opened, so a
+PR's own reviews never help predict it. hit@k = share of test PRs where at least one of
 the top k suggestions really reviewed, `/lgtm`-ed or `/approve`-d it. This is the scope of the number, not an
 overall accuracy claim. Caveat: OWNERS files are today's, not the ones in force at the cutoff.
 
 | Method (446 test PRs) | hit@1 | hit@3 | hit@5 |
 | :--- | ---: | ---: | ---: |
-| **Lore** (`_knowers` on touched folders, then team) | 49% | 76% | 85% |
-| Busiest reviewers before cutoff | 20% | 43% | 57% |
+| **Lore** (`_knowers` on touched folders, then team) | 50% | 77% | 84% |
+| Busiest reviewers before the PR was opened | 18% | 43% | 57% |
 | Random OWNERS approvers of touched folders | 6% | 16% | 27% |
 | Random OWNERS approvers + reviewers | 4% | 13% | 21% |
 | Random official SIG leads of the PR's team | 12% | 34% | 45% |

@@ -1,15 +1,16 @@
 {
   "cutoff": "2026-08-01",
   "test_prs": 446,
+  "no_peeking": "only evidence dated before the day each test PR was opened",
   "scope": "merged kubernetes/kubernetes PRs of the 5 slice teams in the graph, merged on/after cutoff",
   "hit_at_k": {
     "lore": {
-      "@1": 0.487,
-      "@3": 0.762,
-      "@5": 0.85
+      "@1": 0.496,
+      "@3": 0.771,
+      "@5": 0.841
     },
     "most_active": {
-      "@1": 0.202,
+      "@1": 0.182,
       "@3": 0.426,
       "@5": 0.574
     },
