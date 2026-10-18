@@ -40,9 +40,10 @@ END = date(2026, 10, 18)     # last day included
 RAW = Path("data/raw")
 
 GRAPHQL_URL = "https://api.github.com/graphql"
-PAGE_SIZE = 50        # items per call
-SMALL_PAGE_SIZE = 20  # used after a timeout
-MIN_REMAINING = 200   # below this many points left, sleep until the reset
+PAGE_SIZE = 50             # items per call
+SMALLER_PAGES = (20, 10)   # after each timeout, step down to the next size
+TIMEOUT_WAIT = 30          # seconds to wait after a timeout before retrying
+MIN_REMAINING = 200        # below this many points left, sleep until the reset
 MAX_TRIES = 5
 
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -123,7 +124,7 @@ def wait_for_rate_limit(rate):
 
 
 class Timeout(Exception):
-    pass
+    """GitHub didn't give a full answer in time. The caller waits and retries with smaller pages."""
 
 
 def post(query, variables):
@@ -134,17 +135,24 @@ def post(query, variables):
                                  headers=HEADERS, timeout=90)
         except requests.exceptions.Timeout:
             raise Timeout("no answer within 90s")
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
+            raise Timeout(f"connection error: {e}")
 
+        if resp.status_code == 504:
+            raise Timeout("HTTP 504")
         text = resp.text.lower()
-        if resp.status_code in (502, 503, 504) or "secondary rate limit" in text:
-            if resp.status_code in (502, 504) and variables["n"] > SMALL_PAGE_SIZE:
-                raise Timeout(f"HTTP {resp.status_code}")  # caller retries with smaller pages
+        if resp.status_code in (502, 503) or "secondary rate limit" in text:
+            if resp.status_code == 502 and variables["n"] == PAGE_SIZE:
+                raise Timeout("HTTP 502")  # probably too big a page
             print(f"    [retry {attempt}/{MAX_TRIES}] HTTP {resp.status_code}, waiting 60s", flush=True)
             time.sleep(60)
             continue
         resp.raise_for_status()
 
-        body = resp.json()
+        try:
+            body = resp.json()
+        except requests.exceptions.JSONDecodeError as e:
+            raise Timeout(f"cut-off answer ({e})")
         errors = body.get("errors") or []
         if any(e.get("type") == "RATE_LIMITED" for e in errors):
             print(f"    [retry {attempt}/{MAX_TRIES}] rate limited, waiting 60s", flush=True)
@@ -213,15 +221,20 @@ def fetch_bucket(kind, team, month, first, last):
         query, clean = ISSUE_QUERY, clean_issue
 
     items, after, n, calls, left, total = [], None, PAGE_SIZE, 0, None, 0
+    tries = 0  # failed tries for the current page
     while True:
         try:
             data = post(query, {"q": q, "n": n, "after": after})
         except Timeout as e:
-            if n == SMALL_PAGE_SIZE:
-                raise
-            print(f"    [timeout] {e}; switching to pages of {SMALL_PAGE_SIZE}", flush=True)
-            n = SMALL_PAGE_SIZE
+            tries += 1
+            if tries >= MAX_TRIES:
+                raise RuntimeError(f"gave up after {MAX_TRIES} tries: {e}") from e
+            n = next((s for s in SMALLER_PAGES if s < n), n)  # 50 -> 20 -> 10, then stays 10
+            print(f"    [timeout {tries}/{MAX_TRIES}] {e}; waiting {TIMEOUT_WAIT}s, "
+                  f"then pages of {n}", flush=True)
+            time.sleep(TIMEOUT_WAIT)
             continue
+        tries = 0
         calls += 1
         rate, search = data["rateLimit"], data["search"]
         left, total = rate["remaining"], search["issueCount"]
