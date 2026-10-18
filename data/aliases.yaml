@@ -2,3 +2,8 @@
 # Every login the loaders read passes through this map (after lowercasing).
 # Add a line only after a person has checked that both names are the same human.
 liggit: liggitt
+# Checked against the GitHub API (2026-10-18): the wrong name has no account, the right
+# one is an active member of the same team.
+gnuified: gnufied
+mattcarry: mattcary
+sjennning: sjenning
