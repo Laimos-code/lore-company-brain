@@ -16,6 +16,8 @@ WHY_PREFIX = re.compile(r"^\s*(why|how come)(\s+(did|do|does|was|were|is))?(\s+(
                         r"(\s+(choose|chose|pick|use|decide on|go with|add|remove))?\s*", re.I)
 OWN = re.compile(r"\b(who owns|owner|owners|official)\b", re.I)
 KEP = re.compile(r"\bKEP[-\s#]*(\d+)\b", re.I)
+ISSUE = re.compile(r"\b(new issue|issue titled|bug report|triage|route this|where should this go)\b", re.I)
+QUOTED = re.compile(r"[\"“]([^\"”]{5,200})[\"”]")
 ROLE_TEXT = {"kep_approver": "KEP approver", "tech_lead": "tech lead"}
 
 
@@ -39,6 +41,9 @@ def _pick(question: str):
     m = KEP.search(q)
     kep = f"kep:{int(m.group(1))}" if m else None
     owns = bool(OWN.search(q)) and "know" not in q.lower()
+    if ISSUE.search(q):  # a pasted issue: route it (checked first, so "stuck" in a title isn't a stale question)
+        title = QUOTED.search(q)
+        return tools.route_issue(title.group(1) if title else q, q)
     if STALE.search(q):
         return tools.whats_stale(team)
     gate = next((g for g in GATE.findall(q) if tools._resolve(f"gate:{g}")[0] == "gate"), None)
@@ -55,7 +60,12 @@ def _pick(question: str):
     folder = re.search(r"\b[\w.-]+(?:/[\w.-]+)+\b", q)
     if folder and tools._resolve(f"folder:{folder.group(0)}")[0] == "folder":
         return tools.who_knows(f"folder:{folder.group(0)}")
-    return tools.why(q)
+    env = tools.why(q)
+    if (env.get("data") or {}).get("thing", "found") is None:  # nothing matched at all
+        env["summary"] = ("Lore only knows Kubernetes teams, design decisions (KEPs), code folders and their "
+                          "people, and found nothing matching this question. Try a team (\"sig-node\"), a KEP "
+                          "(\"KEP-4671\") or a folder (\"pkg/kubelet\").")
+    return env
 
 
 def _official_owners(data: Dict[str, Any]):
@@ -88,4 +98,9 @@ def answer(question: str) -> Dict[str, Any]:
                               "status": k.get("status") or ""} for k in data.get("trail") or []]
     ev = env.get("evidence") or {}
     out["graph"] = {"nodes": ev.get("nodes", []), "edges": ev.get("edges", [])}
+    # Same shape as the agent's answer: the step taken (the page shows its owners/knowers
+    # panel from it) and, for a routed issue, the draft comment.
+    out["steps"] = [{"tool": env.get("tool"), "input": {"question": question}, "summary": env.get("summary", "")}]
+    if data.get("draft_comment"):
+        out["draft"] = {"comment": data["draft_comment"], "label": data.get("label")}
     return out

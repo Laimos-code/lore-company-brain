@@ -418,3 +418,28 @@ def test_format_page_fields_excludes_folder_reviewers():
     assert "alice" in owner_logins
     assert "bob" not in owner_logins
 
+
+
+def test_daily_quota_429_pauses_the_model(monkeypatch):
+    """A 429 that says 'retry in hours' is not retried; the model is skipped until then."""
+    import httpx
+    from openai import RateLimitError
+    monkeypatch.setattr(agent, "_llm_paused_until", 0.0)
+    calls = []
+
+    class QuotaClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            resp = httpx.Response(429, request=httpx.Request("POST", "http://x"))
+            raise RateLimitError("Quota exceeded ... GenerateRequestsPerDayPerProjectPerModel-FreeTier ... 'retryDelay': '38918s'",
+                                 response=resp, body=None)
+
+    with pytest.raises(RateLimitError):
+        agent.ask("Who owns SIG Node?", client=QuotaClient())
+    assert len(calls) == 1  # no 2-second retry
+    assert agent._llm_paused_until > __import__("time").time() + 3000
+    monkeypatch.setenv("LLM_API_KEY", "some-key")
+    assert agent.ask("Who owns SIG Node?") is None  # paused: main.py answers from the graph

@@ -69,10 +69,12 @@ def test_ask_without_llm_key():
 
 
 def test_ask_rejects_question_over_2000_chars():
-    """Questions longer than 2000 characters are rejected with 422 Unprocessable Entity."""
+    """Questions longer than 2000 characters (or empty) get a short 400 error, without echoing the input."""
     long_q = "Who owns SIG Node? " * 150  # > 2800 chars
-    response = client.post("/api/ask", json={"question": long_q})
-    assert response.status_code == 422
+    for question in (long_q, ""):
+        response = client.post("/api/ask", json={"question": question})
+        assert response.status_code == 400
+        assert response.json() == {"error": "Ask a question of 1 to 2,000 characters."}
 
 
 
@@ -151,7 +153,7 @@ def test_demo_approve_refuses_kubernetes_repo(monkeypatch):
     monkeypatch.setenv("DEMO_GITHUB_TOKEN", "dummy")
     resp = client.post("/api/approve", json={"issue_number": 1, "comment": "hi", "labels": ["sig/node"]})
     assert resp.json()["ok"] is False
-    assert resp.status_code == 500
+    assert resp.status_code == 503
 
 
 def test_demo_approve_rejects_bad_label_and_long_comment(monkeypatch):
@@ -233,8 +235,27 @@ def test_brain_routes_kep_questions_to_that_kep():
 
 
 def test_page_never_puts_data_into_html():
-    """Answer rows are built with textContent: no innerHTML template that inserts ${...} values."""
+    """Every value the page writes into HTML goes through escapeHtml(), except a few
+    known-safe ones (counters and markup the page builds from fixed strings)."""
     import pathlib
     import re
+    safe = {"i", "nodes.length", "legendHtml(nodes)", 'parts.join(", ")'}
     page = (pathlib.Path(__file__).resolve().parent.parent / "web" / "index.html").read_text(encoding="utf-8")
-    assert not re.findall(r"innerHTML\s*=\s*`[^`]*\$\{", page)
+    unsafe = []
+    for m in re.finditer(r"(?:innerHTML\s*=|insertAdjacentHTML\([^,]+,)\s*[^`;]*`([^`]*)`", page):
+        for expr in re.findall(r"\$\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", m.group(1)):
+            if not expr.strip().startswith("escapeHtml(") and expr.strip() not in safe:
+                unsafe.append(expr.strip())
+    assert not unsafe, f"values written into HTML without escapeHtml(): {unsafe}"
+
+
+def test_brain_routes_a_pasted_issue_and_returns_its_draft():
+    """'A new issue titled "...stuck..."' is triage (route_issue), not a stale-decisions question,
+    and the answer carries the step taken and the draft comment the page shows."""
+    if not _graph_loaded():
+        pytest.skip("graph not loaded")
+    from app import brain
+    a = brain.answer('A new issue titled "Pods stuck Pending after node drain". Triage it.')
+    assert a["tool"] == "route_issue" and a["draft"]["comment"] and a["draft"]["label"]
+    assert a["steps"][0]["tool"] == "route_issue"
+    assert brain.answer("Who really works on sig-scheduling?")["steps"][0]["tool"] == "who_knows"

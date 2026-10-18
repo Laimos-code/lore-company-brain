@@ -206,7 +206,7 @@
   <div class="bg-canvas px-4 pb-[max(16px,env(safe-area-inset-bottom))] sm:px-6">
     <form id="composer" class="relative mx-auto max-w-[720px] rounded-[14px] border border-line bg-surface shadow-[var(--shadow)] transition-colors duration-150 focus-within:border-line-strong" autocomplete="off">
       <label for="q" class="sr-only">Ask Lore</label>
-      <textarea id="q" rows="1" placeholder="Ask about a team, a design decision or a code folder"
+      <textarea id="q" rows="1" maxlength="2000" placeholder="Ask about a team, a design decision or a code folder"
                 class="block max-h-[200px] w-full bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-relaxed text-ink"></textarea>
       <div class="flex items-center justify-between px-2.5 pb-2.5 pt-1">
         <div class="relative">
@@ -488,7 +488,11 @@ async function askLore(question) {
     return exampleAnswer(question, "The agent isn't running on this server yet, so this uses saved example data.");
   }
   if (res.status === 429) throw new Error("Too many questions in a minute. Wait a moment, then ask again.");
-  if (!res.ok) throw new Error(`The server returned an error (status ${res.status}). Ask again in a moment.`);
+  if (!res.ok) {
+    let message = "";
+    try { message = (await res.json()).error || ""; } catch (e) { /* no JSON body */ }
+    throw new Error(message || `The server returned an error (status ${res.status}). Ask again in a moment.`);
+  }
   return res.json();
 }
 

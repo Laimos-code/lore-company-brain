@@ -165,7 +165,7 @@ async def list_demo_issues():
         repo, token = _demo_config()
     except ValueError as e:
         log.error("demo config: %s", e)
-        return _err(500, "Demo repo is not configured")
+        return _err(503, "Live Triage is not set up on this server (DEMO_REPO / DEMO_GITHUB_TOKEN)")
     if _issues_cache["repo"] == repo and time.time() - _issues_cache["at"] < DEMO_ISSUES_TTL_S:
         return _issues_cache["issues"]
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -201,7 +201,7 @@ async def approve_issue(req: ApproveIssueRequest, request: Request):
         repo, token = _demo_config()
     except ValueError as e:
         log.error("demo config: %s", e)
-        return _err(500, "Demo repo is not configured")
+        return _err(503, "Live Triage is not set up on this server (DEMO_REPO / DEMO_GITHUB_TOKEN)")
 
     comment = req.comment.strip()
     if not comment:
@@ -237,7 +237,7 @@ async def route_demo_issue(issue_number: int, request: Request):
         repo, token = _demo_config()
     except ValueError as e:
         log.error("demo config: %s", e)
-        return _err(500, "Demo repo is not configured")
+        return _err(503, "Live Triage is not set up on this server (DEMO_REPO / DEMO_GITHUB_TOKEN)")
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(f"{GITHUB_API}/repos/{repo}/issues/{issue_number}", headers=_headers(token))
     if resp.status_code != 200:

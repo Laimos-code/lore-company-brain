@@ -150,6 +150,25 @@ def normalize_arguments(tool_name: str, args: Any) -> Dict[str, Any]:
     return clean_args
 
 
+# When the model provider says the quota is used up for a long time (e.g. the free tier's daily
+# limit), skip the model until then: answers come from the graph at once instead of waiting
+# for a failing call on every question. Re-checked at least once an hour.
+_llm_paused_until = 0.0
+
+
+def _pause_if_quota_exhausted(error: Exception) -> bool:
+    """True (and pause the model) if a 429 asks us to wait more than a minute."""
+    global _llm_paused_until
+    text = str(error)
+    m = re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+)s", text)
+    wait = int(m.group(1)) if m else (600 if re.search(r"PerDay|quota", text, re.I) else 0)
+    if wait > 60:
+        _llm_paused_until = time.time() + min(wait, 3600)
+        logging.warning("[Lore Agent] Model quota used up; answering from the graph for the next %d s", min(wait, 3600))
+        return True
+    return False
+
+
 def _call_model_with_retry(client: OpenAI, kwargs: Dict[str, Any], start_time: float) -> Any:
     """Execute model call with dynamic timeout and at most one retry if time allows."""
     elapsed = time.time() - start_time
@@ -161,6 +180,8 @@ def _call_model_with_retry(client: OpenAI, kwargs: Dict[str, Any], start_time: f
     try:
         return client.chat.completions.create(**call_kwargs)
     except (RateLimitError, InternalServerError, APIConnectionError) as e:
+        if isinstance(e, RateLimitError) and _pause_if_quota_exhausted(e):
+            raise  # retrying in 2 s can't help when the quota resets in hours
         elapsed_now = time.time() - start_time
         remaining_now = 55.0 - elapsed_now
         # Only retry if remaining budget allows at least 2s sleep + 2s call timeout
@@ -366,8 +387,8 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Optional[Dict[str, An
     and merged evidence graph with strict execution deadlines.
     """
     api_key = os.getenv("LLM_API_KEY")
-    if client is None and not api_key:
-        return None
+    if client is None and (not api_key or time.time() < _llm_paused_until):
+        return None  # no model, or its quota is used up: main.py answers from the graph
 
     start_time = time.time()
 
@@ -547,8 +568,11 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Optional[Dict[str, An
 
     # Extract page fields with correct names
     official_owners, actual_knowers, decision_trail = format_page_fields(tool_results)
+    routed = next((tr.get("data") or {} for tr in tool_results
+                   if tr.get("tool") == "route_issue" and (tr.get("data") or {}).get("draft_comment")), None)
 
     return {
+        "draft": {"comment": routed["draft_comment"], "label": routed.get("label")} if routed else None,
         "question": question,
         "answer": cleaned_answer,
         "steps": steps,

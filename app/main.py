@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -45,6 +46,14 @@ app = FastAPI(
     description="FalkorDB-powered company brain mapping Kubernetes official owners vs actual knowers",
     version="0.1.0",
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def bad_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """A malformed request (e.g. an empty or 2,000+ character question) gets one short error
+    instead of FastAPI's long default that echoes the whole input back."""
+    message = "Ask a question of 1 to 2,000 characters." if request.url.path == "/api/ask" else "Invalid request."
+    return JSONResponse(status_code=400, content={"error": message})
 
 # Enable CORS for browser integration
 app.add_middleware(
