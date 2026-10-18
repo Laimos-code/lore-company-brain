@@ -17,9 +17,23 @@ WHY_PREFIX = re.compile(r"^\s*(why|how come)(\s+(did|do|does|was|were|is))?(\s+(
 OWN = re.compile(r"\b(who owns|owner|owners|official)\b", re.I)
 
 
+TEAM = re.compile(r"\b(sig|wg)[\s-]+([a-z]+)(?:[\s-]([a-z]+))?", re.I)
+
+
+def _team_in(q: str):
+    """The Team a question names ('SIG Node', 'sig-storage', 'wg batch'), else None."""
+    for m in TEAM.finditer(q):
+        kind, a, b = m.groups()
+        for cand in ([f"{kind}-{a}-{b}"] if b else []) + [f"{kind}-{a}"]:
+            key = tools._find_team(cand.lower())
+            if key:
+                return key
+    return None
+
+
 def _pick(question: str):
     q = question.strip()
-    team = tools._find_team(q)
+    team = _team_in(q)
     if STALE.search(q):
         return tools.whats_stale(team)
     gate = next((g for g in GATE.findall(q) if tools._resolve(f"gate:{g}")[0] == "gate"), None)
