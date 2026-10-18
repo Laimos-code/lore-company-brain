@@ -214,3 +214,163 @@ def test_every_edge_source_and_target_exist_in_nodes():
     for edge in result["evidence"]["edges"]:
         assert edge["source"] in node_ids, f"Edge source {edge['source']} missing from nodes"
         assert edge["target"] in node_ids, f"Edge target {edge['target']} missing from nodes"
+
+
+def test_ask_returns_none_when_no_key_and_no_client(monkeypatch):
+    """Problem 1: With no LLM_API_KEY and no client passed, ask() returns None."""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    res = agent.ask("Who owns SIG Node?", client=None)
+    assert res is None
+
+
+def test_empty_env_vars_fallback_to_defaults(monkeypatch):
+    """Problem 2: Empty LLM_BASE_URL and LLM_MODEL fallback to defaults."""
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("LLM_MODEL", "")
+    monkeypatch.setenv("LLM_API_KEY", "fake_key")
+
+    created_kwargs = {}
+
+    def mock_openai_init(**kwargs):
+        created_kwargs.update(kwargs)
+        fake = MagicMock()
+        fake.chat.completions.create.return_value = MockCompletion(MockMessage(content="ok"))
+        return fake
+
+    monkeypatch.setattr(agent, "OpenAI", mock_openai_init)
+    res = agent.ask("Hello")
+    assert res is not None
+    assert created_kwargs.get("base_url") == "https://generativelanguage.googleapis.com/v1beta/openai/"
+    assert created_kwargs.get("max_retries") == 0
+
+
+def test_multi_round_tool_cap_answers_all_tool_calls_and_includes_tools_in_final():
+    """Problem 3: 4 tool calls in round 1 + 4 in round 2: all 8 answered, tools passed with tool_choice='none'."""
+    round1_calls = [
+        MockToolCall(f"call_{i}", "who_owns", {"thing": "sig-node"})
+        for i in range(1, 5)
+    ]
+    round2_calls = [
+        MockToolCall(f"call_{i}", "who_owns", {"thing": "sig-node"})
+        for i in range(5, 9)
+    ]
+
+    script = [
+        MockMessage(tool_calls=round1_calls),
+        MockMessage(tool_calls=round2_calls),
+    ]
+    client = ScriptedLLMClient(script)
+
+    result = agent.ask("Test 4+4 tool cap", client=client)
+
+    # Must execute exactly 6 calls overall
+    assert len(result["steps"]) == 6
+
+    # Verify that in the call with tool_choice="none", all tool calls from round 2 are answered
+    forced_call = client.call_history[-1]
+    assert forced_call.get("tool_choice") == "none"
+    assert forced_call.get("tools") == agent.TOOL_DEFINITIONS
+
+    # Check history in forced_call: every tool_call_id from 1 to 8 must have a matching tool message
+    messages = forced_call["messages"]
+    tool_reply_ids = {m["tool_call_id"] for m in messages if isinstance(m, dict) and m.get("role") == "tool"}
+    for i in range(1, 9):
+        assert f"call_{i}" in tool_reply_ids
+
+    # Calls 7 and 8 should have been marked as skipped due to tool limit
+    skipped_replies = [
+        m for m in messages
+        if isinstance(m, dict) and m.get("role") == "tool" and "skipped: tool limit reached" in str(m.get("content"))
+    ]
+    assert len(skipped_replies) == 2
+
+
+def test_non_dict_tool_arguments_handled_gracefully():
+    """Problem 8: Non-dict tool arguments (None, list, string) don't crash the request."""
+    # Custom mock function with non-dict json arguments
+    class CustomMockFunction:
+        def __init__(self, name: str, args_str: str):
+            self.name = name
+            self.arguments = args_str
+
+    class CustomMockToolCall:
+        def __init__(self, call_id: str, name: str, args_str: str):
+            self.id = call_id
+            self.type = "function"
+            self.function = CustomMockFunction(name, args_str)
+
+    script = [
+        MockMessage(tool_calls=[
+            CustomMockToolCall("call_null", "who_owns", "null"),
+            CustomMockToolCall("call_list", "who_owns", "[\"item\"]"),
+            CustomMockToolCall("call_str", "who_owns", "\"just string\""),
+        ]),
+        MockMessage(content="Handled non-dict tool args safely."),
+    ]
+    client = ScriptedLLMClient(script)
+
+    result = agent.ask("Test malformed args", client=client)
+    assert result is not None
+    assert len(result["steps"]) == 3
+    for step in result["steps"]:
+        assert step["input"] == {}
+
+
+def test_grouped_citations_expanded_and_renumbered():
+    """Problem 9: Grouped citations like [1, 2] and [1-3] are expanded and both sources preserved."""
+    script = [
+        MockMessage(
+            tool_calls=[
+                MockToolCall("call_1", "who_owns", {"thing": "sig-node"}),
+                MockToolCall("call_2", "who_knows", {"thing": "sig-node"}),
+            ]
+        ),
+        MockMessage(
+            content="Official leaders and contributors are documented in [1, 2] and detailed in [1-2]."
+        ),
+    ]
+    client = ScriptedLLMClient(script)
+
+    result = agent.ask("Citation groups", client=client)
+    assert len(result["sources"]) == 2
+    assert "[1]" in result["answer"]
+    assert "[2]" in result["answer"]
+    # Group [1, 2] expanded into [1][2]
+    assert "[1, 2]" not in result["answer"]
+    assert "[1-2]" not in result["answer"]
+
+
+def test_thing_unmodified_gang_scheduling():
+    """Problem 7: normalize_arguments does not rewrite or hyphenate strings like 'Gang Scheduling'."""
+    script = [
+        MockMessage(
+            tool_calls=[MockToolCall("call_1", "who_owns", {"thing": "  Gang Scheduling  "})]
+        ),
+        MockMessage(content="Gang scheduling is tracked under KEP-4671 [1]."),
+    ]
+    client = ScriptedLLMClient(script)
+
+    result = agent.ask("Who owns Gang Scheduling?", client=client)
+    assert result["steps"][0]["input"]["thing"] == "Gang Scheduling"
+
+
+def test_slow_client_respects_deadline_timeout(monkeypatch):
+    """Problem 4: Timeout parameter passed to client call adapts to remaining time budget."""
+    recorded_timeouts = []
+
+    def mock_create(**kwargs):
+        recorded_timeouts.append(kwargs.get("timeout"))
+        return MockCompletion(MockMessage(content="Answer within time."))
+
+    client = MagicMock()
+    client.chat.completions.create = mock_create
+
+    # Artificially advance time so 30 seconds have elapsed since start_time
+    time_states = [100.0, 130.0, 130.0, 130.0]
+    monkeypatch.setattr(agent.time, "time", lambda: time_states.pop(0) if time_states else 130.0)
+
+    result = agent.ask("Timeout test", client=client)
+    assert result is not None
+    assert len(recorded_timeouts) > 0
+    # Remaining time is 55 - 30 = 25s, so timeout should be 25s
+    assert recorded_timeouts[0] <= 25.0

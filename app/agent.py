@@ -4,6 +4,7 @@ Coordinates reasoning over Kubernetes organizational leadership, design decision
 and pull request history using native function calling and graph tools.
 """
 import json
+import logging
 import os
 import re
 import time
@@ -135,79 +136,74 @@ TOOL_CALLABLES = {
     "route_issue": tools.route_issue,
 }
 
-KNOWN_SIGS = {
-    "node", "scheduling", "auth", "storage", "network", "api-machinery",
-    "cli", "cluster-lifecycle", "instrumentation", "k8s-infra", "release",
-    "scalability", "security", "testing", "windows", "architecture", "apps",
-    "autoscaling", "multicluster", "contribex", "docs", "ui"
-}
 
-
-def normalize_arguments(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize tool arguments before execution per contract."""
-    clean_args = dict(args)
-
-    if "thing" in clean_args and clean_args["thing"] is not None:
-        t = str(clean_args["thing"]).strip()
-        # KEP normalization: "KEP 4671" / "4671" -> "KEP-4671"
-        m_kep = re.fullmatch(r"(?:kep[-\s#]*)?(\d+)", t, re.I)
-        if m_kep:
-            t = f"KEP-{m_kep.group(1)}"
+def normalize_arguments(tool_name: str, args: Any) -> Dict[str, Any]:
+    """Normalize tool arguments before execution. Pass through values stripped, leaving resolution to tools._resolve."""
+    if not isinstance(args, dict):
+        return {}
+    clean_args: Dict[str, Any] = {}
+    for k, v in args.items():
+        if isinstance(v, str):
+            clean_args[k] = v.strip()
         else:
-            t_lower = t.lower()
-            if t_lower.startswith("sig ") or t_lower.startswith("sig-"):
-                sig_suffix = t_lower[4:].strip().replace(" ", "-")
-                t = f"sig-{sig_suffix}"
-            elif t_lower.startswith("wg ") or t_lower.startswith("wg-"):
-                wg_suffix = t_lower[3:].strip().replace(" ", "-")
-                t = f"wg-{wg_suffix}"
-            elif t_lower in KNOWN_SIGS:
-                t = f"sig-{t_lower}"
-            elif "/" not in t and "\\" not in t:
-                # If single team name or spaced phrase
-                if " " in t:
-                    t = t.lower().replace(" ", "-")
-        clean_args["thing"] = t
-
-    if "team" in clean_args and clean_args["team"] is not None:
-        team_str = str(clean_args["team"]).strip().lower()
-        if team_str.startswith("sig ") or team_str.startswith("sig-"):
-            team_str = "sig-" + team_str[4:].strip().replace(" ", "-")
-        elif team_str.startswith("wg ") or team_str.startswith("wg-"):
-            team_str = "wg-" + team_str[3:].strip().replace(" ", "-")
-        elif team_str in KNOWN_SIGS:
-            team_str = f"sig-{team_str}"
-        clean_args["team"] = team_str
-
-    if "as_of" in clean_args and clean_args["as_of"] is not None:
-        clean_args["as_of"] = str(clean_args["as_of"]).strip()
-
-    if "title" in clean_args and clean_args["title"] is not None:
-        clean_args["title"] = str(clean_args["title"]).strip()
-
-    if "body" in clean_args and clean_args["body"] is not None:
-        clean_args["body"] = str(clean_args["body"]).strip()
-
+            clean_args[k] = v
     return clean_args
 
 
-def _call_model_with_retry(client: OpenAI, kwargs: Dict[str, Any]) -> Any:
-    """Execute model call with 30s timeout and single retry on 429/5xx with 2s backoff."""
+def _call_model_with_retry(client: OpenAI, kwargs: Dict[str, Any], start_time: float) -> Any:
+    """Execute model call with dynamic timeout and at most one retry if time allows."""
+    elapsed = time.time() - start_time
+    remaining = 55.0 - elapsed
+    timeout = max(1.0, min(30.0, remaining))
     call_kwargs = dict(kwargs)
-    call_kwargs.setdefault("timeout", 30.0)
+    call_kwargs["timeout"] = timeout
 
     try:
         return client.chat.completions.create(**call_kwargs)
     except (RateLimitError, InternalServerError, APIConnectionError) as e:
-        print(f"[Lore Agent] Transient error ({type(e).__name__}): {e}. Retrying after 2s...")
-        time.sleep(2.0)
-        return client.chat.completions.create(**call_kwargs)
+        elapsed_now = time.time() - start_time
+        remaining_now = 55.0 - elapsed_now
+        # Only retry if remaining budget allows at least 2s sleep + 2s call timeout
+        if remaining_now >= 4.0:
+            logging.warning("[Lore Agent] Transient error (%s): %s. Retrying after 2s...", type(e).__name__, e)
+            time.sleep(2.0)
+            call_kwargs["timeout"] = max(1.0, min(30.0, 55.0 - (time.time() - start_time)))
+            return client.chat.completions.create(**call_kwargs)
+        raise
+
+
+def _expand_grouped_citations(text: str) -> str:
+    """Expand grouped or ranged citations like [1, 2] or [1-3] into [1][2][3]."""
+    def expand_bracket(match: re.Match) -> str:
+        inner = match.group(1).strip()
+        parts = re.split(r"[,;]\s*", inner)
+        nums = []
+        for part in parts:
+            part = part.strip()
+            range_match = re.fullmatch(r"(\d+)\s*[-–—]\s*(\d+)", part)
+            if range_match:
+                start, end = int(range_match.group(1)), int(range_match.group(2))
+                if start <= end and end - start <= 20:
+                    nums.extend(range(start, end + 1))
+                else:
+                    nums.append(start)
+                    nums.append(end)
+            elif part.isdigit():
+                nums.append(int(part))
+        if nums:
+            return "".join(f"[{n}]" for n in nums)
+        return match.group(0)
+
+    return re.sub(r"\[([\d\s,;–—-]+)\]", expand_bracket, text)
 
 
 def _clean_citations_and_renumber(raw_answer: str, global_sources: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
     """Validate citations, drop uncited sources, and renumber remaining sources 1..k in order of appearance."""
+    # First expand any grouped or ranged citations e.g. [1, 2] -> [1][2]
+    expanded_answer = _expand_grouped_citations(raw_answer)
+
     sources_by_gid = {s["global_id"]: s for s in global_sources}
-    cited_numbers = [int(m) for m in re.findall(r"\[(\d+)\]", raw_answer)]
+    cited_numbers = [int(m) for m in re.findall(r"\[(\d+)\]", expanded_answer)]
 
     # Identify valid citations in order of first appearance
     valid_cited_order: List[int] = []
@@ -224,7 +220,7 @@ def _clean_citations_and_renumber(raw_answer: str, global_sources: List[Dict[str
             return f"[{remap[num]}]"
         return ""
 
-    cleaned_answer = re.sub(r"\[(\d+)\]", replace_citation, raw_answer)
+    cleaned_answer = re.sub(r"\[(\d+)\]", replace_citation, expanded_answer)
     cleaned_answer = re.sub(r"[ \t]+", " ", cleaned_answer).strip()
 
     final_sources = []
@@ -242,15 +238,16 @@ def _clean_citations_and_renumber(raw_answer: str, global_sources: List[Dict[str
 
 
 def _merge_evidence_for_map(tool_results: List[Dict[str, Any]], cited_sources: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Merge evidence from all tool calls, cap ~40 nodes, and ensure no dangling edges."""
+    """Merge evidence from all tool calls deterministically, capping at 25 nodes without dangling edges."""
     all_nodes: Dict[str, Dict[str, Any]] = {}
     all_edges: List[Dict[str, Any]] = []
 
-    # Map sources to tool calls to prioritize nodes from tools whose sources were cited
     cited_urls = {s["url"] for s in cited_sources if s.get("url")}
     cited_refs = {(s.get("type"), s.get("ref")) for s in cited_sources}
 
-    prioritized_node_ids: set = set()
+    primary_node_ids: List[str] = []
+    cited_tool_node_ids: List[str] = []
+    other_node_ids: List[str] = []
 
     for res in tool_results:
         ev = res.get("evidence", {})
@@ -258,45 +255,34 @@ def _merge_evidence_for_map(tool_results: List[Dict[str, Any]], cited_sources: L
         edges = ev.get("edges", [])
         srcs = res.get("sources", [])
 
-        # Check if this tool produced any cited source
-        has_cited_source = False
-        for s in srcs:
-            if s.get("url") and s["url"] in cited_urls:
-                has_cited_source = True
-                break
-            if (s.get("type"), s.get("ref")) in cited_refs:
-                has_cited_source = True
-                break
+        has_cited_source = any(
+            (s.get("url") and s["url"] in cited_urls) or ((s.get("type"), s.get("ref")) in cited_refs)
+            for s in srcs
+        )
 
-        for n in nodes:
+        for idx, n in enumerate(nodes):
             nid = n.get("id")
-            if nid:
+            if nid and nid not in all_nodes:
                 all_nodes[nid] = n
-                if has_cited_source:
-                    prioritized_node_ids.add(nid)
+                if idx == 0:
+                    primary_node_ids.append(nid)
+                elif has_cited_source:
+                    cited_tool_node_ids.append(nid)
+                else:
+                    other_node_ids.append(nid)
 
         for e in edges:
             all_edges.append(e)
 
-    # Cap to ~40 nodes
-    max_nodes = 40
-    selected_nodes: Dict[str, Dict[str, Any]] = {}
+    # Keep deterministic order: primary nodes first, then cited neighbors, then others, cap at 25
+    selected_order: List[str] = []
+    for nid in primary_node_ids + cited_tool_node_ids + other_node_ids:
+        if nid not in selected_order and len(selected_order) < 25:
+            selected_order.append(nid)
 
-    # First add prioritized nodes
-    for nid in prioritized_node_ids:
-        if len(selected_nodes) < max_nodes and nid in all_nodes:
-            selected_nodes[nid] = all_nodes[nid]
-
-    # Fill remaining capacity
-    for nid, node in all_nodes.items():
-        if len(selected_nodes) >= max_nodes:
-            break
-        if nid not in selected_nodes:
-            selected_nodes[nid] = node
-
+    selected_nodes = {nid: all_nodes[nid] for nid in selected_order}
     valid_ids = set(selected_nodes.keys())
 
-    # Deduplicate edges and drop edges whose source or target was not kept
     seen_edges = set()
     final_edges = []
     for e in all_edges:
@@ -312,21 +298,83 @@ def _merge_evidence_for_map(tool_results: List[Dict[str, Any]], cited_sources: L
     return {"nodes": list(selected_nodes.values()), "edges": final_edges}
 
 
-def ask(question: str, client: Optional[OpenAI] = None) -> Dict[str, Any]:
+def format_page_fields(tool_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Convert raw tool data rows into the field names expected by the web page."""
+    official_owners = []
+    actual_knowers = []
+    decision_trail = []
+
+    seen_owners = set()
+    seen_knowers = set()
+    seen_trail = set()
+
+    for tr in tool_results:
+        data = tr.get("data") or {}
+
+        # 1. Official owners: handle data.official_owners, data.owners, data.team_leads, data.approvers, data.reviewers
+        owners_sources = [
+            (data.get("official_owners") or [], "official owner"),
+            (data.get("owners") or [], "official lead"),
+            (data.get("team_leads") or [], "team lead"),
+            (data.get("approvers") or [], "approver"),
+            (data.get("reviewers") or [], "reviewer"),
+        ]
+        for raw_list, default_role in owners_sources:
+            for o in raw_list:
+                if isinstance(o, dict) and o.get("login"):
+                    login = o["login"]
+                    if login not in seen_owners:
+                        seen_owners.add(login)
+                        role = o.get("role") or (", ".join(o.get("roles") or []) if o.get("roles") else default_role)
+                        official_owners.append({"login": login, "role": role})
+
+        # 2. Actual knowers: is_official from is_official_owner, decisions_count from total
+        for p in data.get("people") or []:
+            if isinstance(p, dict) and p.get("login"):
+                login = p["login"]
+                if login not in seen_knowers:
+                    seen_knowers.add(login)
+                    actual_knowers.append({
+                        "login": login,
+                        "is_official": bool(p.get("is_official_owner", False)),
+                        "decisions_count": int(p.get("total", 0)),
+                    })
+
+        # 3. Decision trail: kep from ref, date from created[:7]
+        for k in data.get("trail") or []:
+            if isinstance(k, dict):
+                kep_ref = k.get("ref") or (f"KEP-{k['num']}" if k.get("num") else k.get("kep", ""))
+                if kep_ref and kep_ref not in seen_trail:
+                    seen_trail.add(kep_ref)
+                    created_date = str(k.get("created") or k.get("date") or "")[:7]
+                    decision_trail.append({
+                        "kep": kep_ref,
+                        "title": k.get("title", ""),
+                        "date": created_date,
+                        "status": k.get("status") or "",
+                    })
+
+    return official_owners, actual_knowers[:8], decision_trail
+
+
+def ask(question: str, client: Optional[OpenAI] = None) -> Optional[Dict[str, Any]]:
     """Execute the Lore agent on `question` and return answer with evidence.
 
     Coordinates OpenAI-compatible client, 5 graph tools, source citation normalization,
     and merged evidence graph with strict execution deadlines.
     """
+    api_key = os.getenv("LLM_API_KEY")
+    if client is None and not api_key:
+        return None
+
     start_time = time.time()
 
-    if client is None:
-        base_url = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
-        api_key = os.getenv("LLM_API_KEY", "")
-        client = OpenAI(base_url=base_url, api_key=api_key)
-
-    model_name = os.getenv("LLM_MODEL", "gemini-3.8-flash")
+    base_url = os.getenv("LLM_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta/openai/"
+    model_name = os.getenv("LLM_MODEL") or "gemini-3.8-flash"
     temperature = 0.2
+
+    if client is None:
+        client = OpenAI(base_url=base_url, api_key=api_key, max_retries=0)
 
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -345,10 +393,10 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Dict[str, Any]:
     final_content = ""
 
     while tool_calls_count < max_tool_calls:
-        # Check deadline: if approaching 50s of the 55s budget, force final answer
+        # Check deadline: if approaching 48s of the 55s budget, force final answer
         elapsed_overall = time.time() - start_time
         if elapsed_overall > 48.0:
-            print(f"[Lore Agent] Approaching execution deadline ({elapsed_overall:.1f}s), forcing final answer.")
+            logging.info("[Lore Agent] Approaching execution deadline (%.1fs), forcing final answer.", elapsed_overall)
             break
 
         kwargs: Dict[str, Any] = {
@@ -358,7 +406,7 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Dict[str, Any]:
             "tools": TOOL_DEFINITIONS,
         }
 
-        response = _call_model_with_retry(client, kwargs)
+        response = _call_model_with_retry(client, kwargs, start_time)
         message = response.choices[0].message
         messages.append(message)
 
@@ -368,107 +416,118 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Dict[str, Any]:
 
         # Process all tool calls returned in this round
         for tool_call in message.tool_calls:
-            tool_calls_count += 1
-            func_name = tool_call.function.name
-            raw_args_str = tool_call.function.arguments or "{}"
+            if tool_calls_count < max_tool_calls:
+                tool_calls_count += 1
+                func_name = tool_call.function.name
+                raw_args_str = tool_call.function.arguments or "{}"
 
-            try:
-                raw_args = json.loads(raw_args_str)
-            except Exception:
-                raw_args = {}
-
-            clean_args = normalize_arguments(func_name, raw_args)
-            step_start = time.time()
-
-            tool_fn = TOOL_CALLABLES.get(func_name)
-            tool_res: Dict[str, Any] = {}
-
-            if not tool_fn:
-                tool_res = {
-                    "tool": func_name,
-                    "summary": f"Tool '{func_name}' is not recognized.",
-                    "data": {"error": f"Tool '{func_name}' not found"},
-                    "evidence": {"nodes": [], "edges": []},
-                    "sources": [],
-                    "is_stub": False,
-                }
-            else:
                 try:
-                    tool_res = tool_fn(**clean_args)
-                except Exception as e:
+                    raw_args = json.loads(raw_args_str)
+                except Exception:
+                    raw_args = {}
+
+                if not isinstance(raw_args, dict):
+                    raw_args = {}
+
+                clean_args = normalize_arguments(func_name, raw_args)
+                step_start = time.time()
+
+                tool_fn = TOOL_CALLABLES.get(func_name)
+                tool_res: Dict[str, Any] = {}
+
+                if not tool_fn:
                     tool_res = {
                         "tool": func_name,
-                        "summary": f"Tool execution failed: {str(e)}",
-                        "data": {"error": str(e)},
+                        "summary": f"Tool '{func_name}' is not recognized.",
+                        "data": {"error": f"Tool '{func_name}' not found"},
                         "evidence": {"nodes": [], "edges": []},
                         "sources": [],
                         "is_stub": False,
                     }
+                else:
+                    try:
+                        tool_res = tool_fn(**clean_args)
+                    except Exception as e:
+                        tool_res = {
+                            "tool": func_name,
+                            "summary": f"Tool execution failed: {str(e)}",
+                            "data": {"error": str(e)},
+                            "evidence": {"nodes": [], "edges": []},
+                            "sources": [],
+                            "is_stub": False,
+                        }
 
-            step_elapsed = time.time() - step_start
-            print(f"[Lore Agent] Step {tool_calls_count}: {func_name}({clean_args}) completed in {step_elapsed:.2f}s")
+                step_elapsed = time.time() - step_start
+                logging.info("[Lore Agent] Step %d: %s(%s) in %.2fs", tool_calls_count, func_name, clean_args, step_elapsed)
 
-            tool_results.append(tool_res)
-            if tool_res.get("is_stub"):
-                any_is_stub = True
+                tool_results.append(tool_res)
+                if tool_res.get("is_stub"):
+                    any_is_stub = True
 
-            steps.append({
-                "tool": func_name,
-                "input": clean_args,
-                "summary": tool_res.get("summary", ""),
-            })
+                steps.append({
+                    "tool": func_name,
+                    "input": clean_args,
+                    "summary": tool_res.get("summary", ""),
+                })
 
-            # Register and number sources globally
-            tool_sources = tool_res.get("sources", [])
-            tool_source_citations = []
+                # Register and number sources globally
+                tool_sources = tool_res.get("sources", [])
+                tool_source_citations = []
 
-            for s in tool_sources:
-                key = s.get("url") or (s.get("type"), s.get("ref"), s.get("title"))
-                if key not in source_key_to_id:
-                    new_gid = len(global_sources) + 1
-                    source_key_to_id[key] = new_gid
-                    global_sources.append({
-                        "global_id": new_gid,
-                        "title": s.get("title", ""),
-                        "url": s.get("url"),
-                        "type": s.get("type", "SOURCE"),
-                        "ref": s.get("ref", ""),
-                    })
-                gid = source_key_to_id[key]
-                ref_title = s.get("ref") or s.get("title") or "Source"
-                tool_source_citations.append(f"[{gid}] {ref_title}")
+                for s in tool_sources:
+                    key = s.get("url") or (s.get("type"), s.get("ref"), s.get("title"))
+                    if key not in source_key_to_id:
+                        new_gid = len(global_sources) + 1
+                        source_key_to_id[key] = new_gid
+                        global_sources.append({
+                            "global_id": new_gid,
+                            "title": s.get("title", ""),
+                            "url": s.get("url"),
+                            "type": s.get("type", "SOURCE"),
+                            "ref": s.get("ref", ""),
+                        })
+                    gid = source_key_to_id[key]
+                    ref_title = s.get("ref") or s.get("title") or "Source"
+                    tool_source_citations.append(f"[{gid}] {ref_title}")
 
-            # Prepare compact JSON for model (truncated to ~3000 chars)
-            compact_payload = json.dumps(
-                {"summary": tool_res.get("summary", ""), "data": tool_res.get("data", {})},
-                separators=(",", ":"),
-                default=str,
-            )
-            if len(compact_payload) > 3000:
-                compact_payload = compact_payload[:3000] + "...(truncated)"
+                # Compact payload truncated to ~3000 chars
+                compact_payload = json.dumps(
+                    {"summary": tool_res.get("summary", ""), "data": tool_res.get("data", {})},
+                    separators=(",", ":"),
+                    default=str,
+                )
+                if len(compact_payload) > 3000:
+                    compact_payload = compact_payload[:3000] + "...(truncated)"
 
-            sources_annotation = ""
-            if tool_source_citations:
-                sources_annotation = "\nSources: " + ", ".join(tool_source_citations)
+                sources_annotation = ""
+                if tool_source_citations:
+                    sources_annotation = "\nSources: " + ", ".join(tool_source_citations)
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": compact_payload + sources_annotation,
-            })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": compact_payload + sources_annotation,
+                })
+            else:
+                # Answer every remaining tool call over the limit so API does not reject history
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": "skipped: tool limit reached",
+                })
 
-            if tool_calls_count >= max_tool_calls:
-                break
-
-    # If reached loop max or forced exit, request final answer with tool_choice="none"
+    # If reached loop max or forced exit, request final answer with tools + tool_choice="none"
     if not final_content:
+        remaining_budget = max(1.0, min(30.0, 55.0 - (time.time() - start_time)))
         force_kwargs = {
             "model": model_name,
             "messages": messages,
             "temperature": temperature,
+            "tools": TOOL_DEFINITIONS,
             "tool_choice": "none",
+            "timeout": remaining_budget,
         }
-        force_response = _call_model_with_retry(client, force_kwargs)
+        force_response = _call_model_with_retry(client, force_kwargs, start_time)
         final_content = force_response.choices[0].message.content or ""
 
     # Clean citations, renumber 1..k in order of citation, drop uncited sources
@@ -477,29 +536,8 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Dict[str, Any]:
     # Merge evidence nodes and edges
     evidence = _merge_evidence_for_map(tool_results, final_sources)
 
-    # Extract auxiliary fields for compatibility with existing endpoints and tests
-    official_owners = []
-    actual_knowers = []
-    decision_trail = []
-
-    for tr in tool_results:
-        data = tr.get("data", {})
-        if "owners" in data and isinstance(data["owners"], list):
-            for o in data["owners"]:
-                if o not in official_owners:
-                    official_owners.append(o)
-        if "team_leads" in data and isinstance(data["team_leads"], list):
-            for o in data["team_leads"]:
-                if o not in official_owners:
-                    official_owners.append(o)
-        if "people" in data and isinstance(data["people"], list):
-            for p in data["people"]:
-                if p not in actual_knowers:
-                    actual_knowers.append(p)
-        if "trail" in data and isinstance(data["trail"], list):
-            for t in data["trail"]:
-                if t not in decision_trail:
-                    decision_trail.append(t)
+    # Extract page fields with correct names
+    official_owners, actual_knowers, decision_trail = format_page_fields(tool_results)
 
     return {
         "question": question,
@@ -508,7 +546,6 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Dict[str, Any]:
         "evidence": evidence,
         "sources": final_sources,
         "is_stub": any_is_stub,
-        # Backward compatibility aliases
         "graph": evidence,
         "official_owners": official_owners,
         "actual_knowers": actual_knowers,

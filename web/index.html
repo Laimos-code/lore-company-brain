@@ -755,63 +755,104 @@
 
       stubIndicator.style.display = data.is_stub ? 'inline-block' : 'none';
 
-      // Render Owners
+      // Render Owners safely
       ownersList.innerHTML = '';
       if (data.official_owners && data.official_owners.length) {
         data.official_owners.forEach(o => {
           const li = document.createElement('li');
           li.className = 'person-row';
-          li.innerHTML = `
-            <span class="person-name">@${o.login}</span>
-            <span class="person-role">${o.role || 'official lead'}</span>
-          `;
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'person-name';
+          nameSpan.textContent = '@' + (o.login || '');
+          const roleSpan = document.createElement('span');
+          roleSpan.className = 'person-role';
+          roleSpan.textContent = o.role || 'official lead';
+          li.appendChild(nameSpan);
+          li.appendChild(roleSpan);
           ownersList.appendChild(li);
         });
       } else {
-        ownersList.innerHTML = '<li class="person-row" style="color:var(--text-dim)">No official leaders listed.</li>';
+        const li = document.createElement('li');
+        li.className = 'person-row';
+        li.style.color = 'var(--text-dim)';
+        li.textContent = 'No official leaders listed.';
+        ownersList.appendChild(li);
       }
 
-      // Render Knowers
+      // Render Knowers safely
       knowersList.innerHTML = '';
       if (data.actual_knowers && data.actual_knowers.length) {
         data.actual_knowers.forEach(k => {
           const li = document.createElement('li');
           li.className = 'person-row';
-          const badge = !k.is_official 
-            ? '<span class="hidden-knower-badge">Not on Org Chart</span>' 
-            : '<span style="font-size:0.75rem; color:var(--text-dim)">Official</span>';
-          li.innerHTML = `
-            <span class="person-name">@${k.login} ${badge}</span>
-            <span class="person-role">${k.decisions_count ? k.decisions_count + ' decisions' : 'expert'}</span>
-          `;
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'person-name';
+          nameSpan.textContent = '@' + (k.login || '') + ' ';
+          const badge = document.createElement('span');
+          if (!k.is_official) {
+            badge.className = 'hidden-knower-badge';
+            badge.textContent = 'Not on Org Chart';
+          } else {
+            badge.style.fontSize = '0.75rem';
+            badge.style.color = 'var(--text-dim)';
+            badge.textContent = 'Official';
+          }
+          nameSpan.appendChild(badge);
+
+          const roleSpan = document.createElement('span');
+          roleSpan.className = 'person-role';
+          roleSpan.textContent = (k.decisions_count != null && k.decisions_count !== '') ? k.decisions_count + ' decisions' : 'expert';
+
+          li.appendChild(nameSpan);
+          li.appendChild(roleSpan);
           knowersList.appendChild(li);
         });
       } else {
-        knowersList.innerHTML = '<li class="person-row" style="color:var(--text-dim)">No decision evidence recorded.</li>';
+        const li = document.createElement('li');
+        li.className = 'person-row';
+        li.style.color = 'var(--text-dim)';
+        li.textContent = 'No decision evidence recorded.';
+        knowersList.appendChild(li);
       }
 
-      // Decision Trail Timeline
+      // Decision Trail Timeline safely
       if (data.decision_trail && data.decision_trail.length) {
         timelineView.style.display = 'block';
         timelineSteps.innerHTML = '';
         data.decision_trail.forEach(d => {
           const div = document.createElement('div');
           div.className = 'timeline-step';
-          div.innerHTML = `<strong>${d.kep} (${d.title})</strong> &bull; <span style="color:var(--text-muted); font-size:0.8rem;">${d.date} [${d.status}]</span>`;
+          const strong = document.createElement('strong');
+          strong.textContent = `${d.kep || ''} (${d.title || ''})`;
+          div.appendChild(strong);
+          div.appendChild(document.createTextNode(' • '));
+          const span = document.createElement('span');
+          span.style.color = 'var(--text-muted)';
+          span.style.fontSize = '0.8rem';
+          span.textContent = `${d.date || ''} [${d.status || ''}]`;
+          div.appendChild(span);
           timelineSteps.appendChild(div);
         });
       } else {
         timelineView.style.display = 'none';
       }
 
-      // Sources
+      // Sources safely with links and [n] prefix
       sourcesContainer.innerHTML = '';
       if (data.sources && data.sources.length) {
         data.sources.forEach(s => {
-          const span = document.createElement('span');
-          span.className = 'source-tag';
-          span.textContent = `${s.type || 'SOURCE'}: ${s.ref || s.n} (${s.title})`;
-          sourcesContainer.appendChild(span);
+          const tag = s.url ? document.createElement('a') : document.createElement('span');
+          tag.className = 'source-tag';
+          if (s.url) {
+            tag.href = s.url;
+            tag.target = '_blank';
+            tag.rel = 'noopener noreferrer';
+            tag.style.textDecoration = 'none';
+          }
+          const numPrefix = s.n != null ? `[${s.n}] ` : '';
+          const typeRef = s.type && s.ref ? `${s.type}: ${s.ref}` : (s.ref || s.title || 'Source');
+          tag.textContent = `${numPrefix}${typeRef} (${s.title})`;
+          sourcesContainer.appendChild(tag);
         });
       }
 
