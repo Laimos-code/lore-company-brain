@@ -92,6 +92,10 @@ class ApproveIssueRequest(BaseModel):
     labels: List[str] = Field(default_factory=list)
 
 
+class RepoNotAllowed(ValueError):
+    """DEMO_REPO points at a repo Lore must never act on (kubernetes*, or another owner)."""
+
+
 def _demo_config() -> tuple:
     """Repo and token come only from .env, never from the request."""
     repo = os.getenv("DEMO_REPO", "").strip()
@@ -101,7 +105,7 @@ def _demo_config() -> tuple:
     owner = repo.split("/", 1)[0].lower()
     allowed_owner = (os.getenv("DEMO_REPO_OWNER") or "Laimos-code").strip().lower()
     if owner.startswith("kubernetes") or owner != allowed_owner:
-        raise ValueError("Refusing to act on a repository outside the demo owner")
+        raise RepoNotAllowed("Refusing to act on a repository outside the demo owner")
     if not token:
         raise ValueError("DEMO_GITHUB_TOKEN is not set")
     return repo, token
@@ -118,6 +122,13 @@ _issues_cache: Dict[str, Any] = {"at": 0.0, "repo": None, "issues": None}
 
 def _err(status: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"ok": False, "error": message})
+
+
+def _config_err(e: ValueError) -> JSONResponse:
+    log.error("demo config: %s", e)
+    if isinstance(e, RepoNotAllowed):
+        return _err(403, "This repo is not allowed")
+    return _err(503, "Live Triage is not set up on this server (DEMO_REPO / DEMO_GITHUB_TOKEN)")
 
 
 async def _limited(request: Request, name: str, per_minute: int) -> bool:
@@ -164,8 +175,7 @@ async def list_demo_issues():
     try:
         repo, token = _demo_config()
     except ValueError as e:
-        log.error("demo config: %s", e)
-        return _err(503, "Live Triage is not set up on this server (DEMO_REPO / DEMO_GITHUB_TOKEN)")
+        return _config_err(e)
     if _issues_cache["repo"] == repo and time.time() - _issues_cache["at"] < DEMO_ISSUES_TTL_S:
         return _issues_cache["issues"]
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -200,8 +210,7 @@ async def approve_issue(req: ApproveIssueRequest, request: Request):
     try:
         repo, token = _demo_config()
     except ValueError as e:
-        log.error("demo config: %s", e)
-        return _err(503, "Live Triage is not set up on this server (DEMO_REPO / DEMO_GITHUB_TOKEN)")
+        return _config_err(e)
 
     comment = req.comment.strip()
     if not comment:
@@ -236,8 +245,7 @@ async def route_demo_issue(issue_number: int, request: Request):
     try:
         repo, token = _demo_config()
     except ValueError as e:
-        log.error("demo config: %s", e)
-        return _err(503, "Live Triage is not set up on this server (DEMO_REPO / DEMO_GITHUB_TOKEN)")
+        return _config_err(e)
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(f"{GITHUB_API}/repos/{repo}/issues/{issue_number}", headers=_headers(token))
     if resp.status_code != 200:

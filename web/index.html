@@ -749,6 +749,8 @@ function draftFromSteps(steps) {
   const s = steps.find((x) => x.tool === "route_issue" && x.data && x.data.draft_comment);
   return s ? { comment: s.data.draft_comment, label: s.data.label } : null;
 }
+// Labels the practice repo accepts (app/actions.py ALLOWED_LABELS); other teams post the comment only.
+const TRIAGE_LABELS = ["sig/node", "sig/scheduling", "sig/auth", "sig/storage", "sig/network"];
 let demoIssues = null;
 function loadDemoIssues() {
   if (!demoIssues) {
@@ -792,11 +794,21 @@ function buildDraft(draft) {
     button.disabled = true; select.disabled = true;
     result.textContent = "Posting";
     try {
-      const res = await fetch("/api/approve", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ issue_number: Number(select.value), comment: draft.comment, labels: draft.label ? [draft.label] : [] })
+      const post = () => fetch("/api/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Approve-Passcode": sessionStorage.getItem("lore-approve-passcode") || "" },
+        body: JSON.stringify({ issue_number: Number(select.value), comment: draft.comment, labels: TRIAGE_LABELS.includes(draft.label) ? [draft.label] : [] })
       });
-      const out = await res.json().catch(() => ({}));
+      let res = await post();
+      let out = await res.json().catch(() => ({}));
+      if (res.status === 403 && /passcode/i.test(out.error || "")) {
+        const code = window.prompt("Approve passcode");
+        if (!code) throw new Error("passcode needed");
+        sessionStorage.setItem("lore-approve-passcode", code);
+        res = await post();
+        out = await res.json().catch(() => ({}));
+        if (res.status === 403) sessionStorage.removeItem("lore-approve-passcode");
+      }
       if (!res.ok || !out.ok) throw new Error(out.error || `status ${res.status}`);
       const url = safeUrl(out.comment_url);
       result.innerHTML = url ? `Posted. <a class="text-accent hover:underline" href="${escapeHtml(url)}" target="_blank" rel="noopener">See it on GitHub</a>` : "Posted.";
