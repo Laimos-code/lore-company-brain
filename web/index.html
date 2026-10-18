@@ -812,6 +812,9 @@
     const triageComment = document.getElementById('triage-comment');
     const triageApproveBtn = document.getElementById('triage-approve-btn');
     let triageLabels = [];
+    function triagePasscode() {
+      return sessionStorage.getItem('lore-approve-passcode') || '';
+    }
 
     async function loadDemoIssues() {
       try {
@@ -837,15 +840,15 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error);
         triageResult.style.display = 'block';
-        const votes = Object.entries(data.team_votes || {}).map(([t, v]) => `${t} ${v}`).join(', ');
+        const votes = (data.team_scores || []).map(t => `${t.team} ${t.score}`).join(', ');
         document.getElementById('triage-summary').textContent =
-          `Suggested team: ${data.team || 'none'}  (graph votes: ${votes})`;
+          `Suggested team: ${data.team || 'none'}  (graph scores: ${votes})`;
         const ul = document.getElementById('triage-reviewers');
         ul.innerHTML = '';
-        (data.reviewers || []).forEach(r => {
+        (data.people || []).forEach(p => {
           const li = document.createElement('li');
           li.className = 'person-row';
-          li.textContent = `@${r.login}  (${r.evidence.team_prs} team PRs reviewed, ${Math.round(r.evidence.focus * 100)}% focus)`;
+          li.textContent = `${p.display || p.login}: ${p.reason || ''}`;
           ul.appendChild(li);
         });
         triageLabels = data.labels || [];
@@ -863,10 +866,15 @@
       try {
         const res = await fetch('/api/approve', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-Approve-Passcode': triagePasscode() },
           body: JSON.stringify({ issue_number: Number(triageSelect.value), comment: triageComment.value, labels: triageLabels })
         });
         const data = await res.json();
+        if (res.status === 403) {
+          const code = prompt('Approve passcode:');
+          if (code) sessionStorage.setItem('lore-approve-passcode', code);
+          throw new Error(data.error);
+        }
         if (!data.ok) throw new Error(data.error);
         const out = document.getElementById('triage-posted');
         out.innerHTML = '';

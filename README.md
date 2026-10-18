@@ -24,7 +24,7 @@ Every organization has two org charts:
 - **Same gap in code review**: In each of the 5 teams we loaded, 5 or 6 of the top 8 PR reviewers are not that team's official leaders. `liggitt` (a SIG Auth lead) is a top-2 reviewer in all five.
 - **Decision Trail & Replacements**: Traces decisions across an 8-year evolution (e.g. *Coscheduling* (KEP-583, 2018) &rarr; *Gang Scheduling* (KEP-4671, 2025) &rarr; *Decouple PodGroup API* (KEP-5832, 2026)).
 - **Stale Decision Catch**: Surfaces decisions marked `implementable` at alpha stage that have gone untouched for 8+ releases.
-- **Actionable Routing**: Triage incoming issues to the real experts and approve actions via `/api/actions/approve`.
+- **Actionable Routing**: Triage incoming issues to the real experts and a person approves the draft before it is posted (`/api/route-issue/{n}` then `/api/approve`).
 
 ---
 
@@ -248,64 +248,15 @@ To host Lore on a small cloud server (DigitalOcean, AWS EC2, Hetzner, or GitHub 
 
 ---
 
-## 🧠 Graph Model (FalkorDB graph `k8s`)
+## 📊 Evaluation: predicting real reviewers
 
-| Node | Source |
-| :--- | :--- |
-| `Person`, `Team` (SIG/WG) | `kubernetes/community` `sigs.yaml` |
-| `KEP`, `FeatureGate`, `Release` | `kubernetes/enhancements` `kep.yaml` files |
-| `Dir` | `OWNERS` / `OWNERS_ALIASES` in `kubernetes/kubernetes` (585 dirs) |
-| `PR` | 3,135 merged `kubernetes/kubernetes` PRs, Jan–Oct 2026 (GitHub GraphQL) |
+`FALKORDB_HOST=localhost python scripts/eval_reviewers.py 2026-08-01` reads everything from the graph.
+Test set: merged PRs of the 5 slice teams with `merged >= 2026-08-01` that have a reviewer other than the
+author. Lore only sees evidence dated before the cutoff. hit@k = share of test PRs where at least one of
+the top k suggestions really reviewed, `/lgtm`-ed or `/approve`-d it. This is the scope of the number, not an
+overall accuracy claim. Caveat: OWNERS files are today's, not the ones in force at the cutoff.
 
-Relationships: `LEADS`, `AUTHORED`, `REVIEWED`, `APPROVED`, `OWNED_BY`, `REPLACES`, `INTRODUCES`, `REACHED` (decisions);
-`OWNS_CODE {role}` (Person→Dir), `LABELED` (Dir→Team), `TOUCHES` (PR→Dir), `TAGGED` (PR→Team),
-`OPENED`, `REVIEWED_PR`, `LGTM`, `APPROVED_PR` (Person→PR), and `SAME_AS` for entity resolution
-(e.g. `liggit`, `ligitt` → `liggitt`; a login one edit away from a 3×-more-active login).
-
-Build it:
-```bash
-python scripts/load_k8s_brain.py                                  # decisions graph
-GITHUB_TOKEN=... python scripts/fetch_k8s_prs.py data/prs.jsonl   # merged PRs + reviews
-python scripts/load_k8s_activity.py data/k8s_repo data/prs.jsonl  # OWNERS + PR activity
-```
-
-### Key Cypher queries (`app/graph_tools.py`)
-
-Who actually knows a team (official chart vs. real work):
-```cypher
-MATCH (t:Team {key:$team})
-OPTIONAL MATCH (p0:Person)-[:AUTHORED|REVIEWED|APPROVED]->(k:KEP)-[:OWNED_BY]->(t)
-OPTIONAL MATCH (p0)-[:SAME_AS]->(c:Person)
-WITH t, coalesce(c, p0) AS p, count(DISTINCT k) AS decisions ...
-```
-Team reviewers weighted by focus (so repo-wide reviewers don't drown out specialists):
-```cypher
-MATCH (p:Person)-[:REVIEWED_PR|LGTM|APPROVED_PR]->(pr:PR)-[:TAGGED]->(:Team {key:$t})
-WITH p, count(DISTINCT pr) AS n WHERE n >= 3
-MATCH (p)-[:REVIEWED_PR|LGTM|APPROVED_PR]->(all:PR)
-WITH p, n, count(DISTINCT all) AS total
-RETURN p.login, n, total, n * (n * 1.0 / total) AS s ORDER BY s DESC
-```
-Reviewer prediction for changed files: people with recency-decayed (90-day half-life) review activity on PRs
-that `TOUCHES` the same `Dir` (weight 1.0), sibling dirs (0.3) or the same `Team` (0.2), role-weighted
-(approve 2.0, lgtm 1.5, review 1.0). Decision trails follow `REPLACES*`; stale decisions are
-`implementable` alpha KEPs last touched 8+ releases ago.
-
-`/api/ask` answers from these queries when no LLM is configured (`app/brain.py`, `is_stub: false`).
-
-### Evaluation: predicting real reviewers
-
-`scripts/eval_reviewers.py`: graph built only from PRs merged **before 2026-08-01**; test set = the **846**
-merged `kubernetes/kubernetes` PRs from 2026-08-01 to 2026-10-17 in our fetch. Truth = people who reviewed,
-`/lgtm`-ed or `/approve`-d the PR (author excluded). Metric = hit@k (at least one true reviewer in the top k).
-This is the scope of the number: it is not an overall accuracy claim.
-
-| Method | hit@1 | hit@3 | hit@5 |
-| :--- | ---: | ---: | ---: |
-| **Lore graph ranking** | **0.233** | **0.609** | **0.709** |
-| Most active reviewers repo-wide | 0.197 | 0.317 | 0.492 |
-| Random OWNERS of the touched files (expected) | 0.097 | 0.264 | 0.389 |
-| Official SIG leads (`sigs.yaml`) | 0.053 | 0.241 | 0.369 |
+EVAL_TABLE
 
 Raw output: [`docs/eval_reviewers.json`](docs/eval_reviewers.json).
 
@@ -318,11 +269,11 @@ Raw output: [`docs/eval_reviewers.json`](docs/eval_reviewers.json).
 | `GET` | `/` | Serves the interactive web interface (`web/index.html`). |
 | `GET` | `/api/health` | Returns service health & FalkorDB connection status (`{"ok": true, "falkordb": true}`). |
 | `POST` | `/api/ask` | Queries Lore brain with 60-second timeout guard and 20 req/min rate limit per IP. |
-| `POST` | `/api/actions/approve` | Approves an issue routing triage, draft comment, or decision ping. |
+| `POST` | `/api/actions/approve` | Deprecated stub kept for the contract; posts nothing. |
 | `GET` | `/api/actions/history` | Lists approved action history. |
 | `GET` | `/api/demo-issues` | Lists open issues in the practice repo (`DEMO_REPO`). |
-| `GET` | `/api/route-issue/{n}` | Graph suggestion for a practice issue: team, `sig/*` label, focused reviewers, draft comment. Posts nothing. |
-| `POST` | `/api/approve` | Human-approved triage: posts the comment and adds allowed `sig/*` labels plus `triage/lore-suggested`. |
+| `GET` | `/api/route-issue/{n}` | `app.tools.route_issue` on a practice issue: team, `sig/*` label, people, draft comment. Posts nothing. 10/min per visitor. |
+| `POST` | `/api/approve` | Human-approved triage: posts the comment and adds allowed `sig/*` labels plus `triage/lore-suggested`. 3/min per visitor, `APPROVE_DAILY_CAP`/day, optional `APPROVE_PASSCODE`; only `DEMO_REPO_OWNER` repos. |
 
 See [`docs/tool_contract.md`](docs/tool_contract.md) for full JSON request and response payloads.
 

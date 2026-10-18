@@ -34,7 +34,7 @@ def test_ask_endpoint_stub_response():
     assert "official_owners" in data
     assert "actual_knowers" in data
     assert "sources" in data
-    assert isinstance(data.get("is_stub"), bool)
+    assert data.get("is_stub") is (not _graph_loaded())
 
 
 def test_ask_decision_trail():
@@ -43,7 +43,7 @@ def test_ask_decision_trail():
     assert response.status_code == 200
     data = response.json()
     assert "decision_trail" in data or "answer" in data
-    assert isinstance(data.get("is_stub"), bool)
+    assert data.get("is_stub") is (not _graph_loaded())
 
 
 def test_ask_rate_limiting(monkeypatch):
@@ -102,12 +102,14 @@ def test_demo_approve_refuses_kubernetes_repo(monkeypatch):
     monkeypatch.setenv("DEMO_GITHUB_TOKEN", "dummy")
     resp = client.post("/api/approve", json={"issue_number": 1, "comment": "hi", "labels": ["sig/node"]})
     assert resp.json()["ok"] is False
-    assert "kubernetes" in resp.json()["error"]
+    assert resp.status_code == 500
 
 
 def test_demo_approve_rejects_bad_label_and_long_comment(monkeypatch):
     """Only allow-listed labels and comments up to 2000 chars."""
-    monkeypatch.setenv("DEMO_REPO", "someone/lore-demo-issues")
+    from app import actions
+    actions._limiters.clear()
+    monkeypatch.setenv("DEMO_REPO", "Laimos-code/lore-demo-issues")
     monkeypatch.setenv("DEMO_GITHUB_TOKEN", "dummy")
     bad_label = client.post("/api/approve", json={"issue_number": 1, "comment": "hi", "labels": ["lgtm"]})
     assert bad_label.status_code == 400 and bad_label.json()["ok"] is False
@@ -115,31 +117,44 @@ def test_demo_approve_rejects_bad_label_and_long_comment(monkeypatch):
     assert too_long.status_code == 400 and too_long.json()["ok"] is False
 
 
-def _graph_or_skip():
+def _graph_loaded():
     try:
-        from app.graph_tools import get_graph
-        g = get_graph()
-        if not g.query("MATCH (pr:PR) RETURN count(pr)").result_set[0][0]:
-            pytest.skip("graph not loaded")
-        return g
+        from app import tools
+        return bool(tools._q("MATCH (:Person)-[:REVIEWED]->(pr:PR)-[:FOR_TEAM]->(:Team) RETURN count(pr)")[0][0])
     except Exception:
-        pytest.skip("FalkorDB not reachable")
+        return False
 
 
-def test_brain_answers_from_graph():
-    """With the graph loaded, /api/ask answers are real (is_stub false) and use the right tool."""
-    g = _graph_or_skip()
-    from app.brain import answer
-    assert answer("Who actually knows SIG Node?", g)["tool"] == "who_knows"
-    trail = answer("Why did they choose gang scheduling?", g)
-    assert trail["tool"] == "decision_trail" and any(t["kep"] == "KEP-583" for t in trail["decision_trail"])
-    assert answer("What decisions are stuck at alpha?", g)["tool"] == "stale_decisions"
+def test_ask_is_real_when_graph_loaded():
+    """With the graph loaded, /api/ask must answer from Cypher, never the stub."""
+    if not _graph_loaded():
+        pytest.skip("graph not loaded")
+    for q, tool in [("Who actually knows SIG Node?", "who_knows"),
+                    ("Why did they choose gang scheduling?", "why"),
+                    ("What decisions are stuck at alpha?", "whats_stale")]:
+        data = client.post("/api/ask", json={"question": q}).json()
+        assert data["is_stub"] is False and data["tool"] == tool, (q, data.get("tool"))
 
 
-def test_route_issue_picks_team_and_reviewers():
-    g = _graph_or_skip()
-    from app.graph_tools import route_issue
-    r = route_issue(g, "Gang of training pods partly scheduled", "scheduler places 5 of 8 pods; need all or nothing",
-                    ["sig-node", "sig-scheduling", "sig-auth", "sig-storage", "sig-network"])
-    assert r["team"] == "sig-scheduling" and r["label"] == "sig/scheduling"
-    assert r["reviewers"] and len(r["comment"]) <= 2000
+def test_demo_config_refuses_other_owners(monkeypatch):
+    from app.actions import _demo_config
+    monkeypatch.setenv("DEMO_GITHUB_TOKEN", "x")
+    for repo in ["kubernetes-sigs/kueue", "kubernetes-csi/external-provisioner", "someone/else"]:
+        monkeypatch.setenv("DEMO_REPO", repo)
+        with pytest.raises(ValueError):
+            _demo_config()
+    monkeypatch.setenv("DEMO_REPO", "Laimos-code/lore-demo-issues")
+    assert _demo_config()[0] == "Laimos-code/lore-demo-issues"
+
+
+def test_approve_rate_limited_and_passcode(monkeypatch):
+    from app import actions
+    monkeypatch.setenv("DEMO_REPO", "Laimos-code/lore-demo-issues")
+    monkeypatch.setenv("DEMO_GITHUB_TOKEN", "x")
+    monkeypatch.setenv("APPROVE_PASSCODE", "s3cret")
+    actions._limiters.clear()
+    bad = {"issue_number": 1, "comment": "hi", "labels": ["not/allowed"]}
+    assert client.post("/api/approve", json=bad).status_code == 403
+    codes = [client.post("/api/approve", json=bad, headers={"X-Approve-Passcode": "s3cret"}).status_code
+             for _ in range(10)]
+    assert codes[:3] == [400, 400, 400] and set(codes[3:]) == {429}

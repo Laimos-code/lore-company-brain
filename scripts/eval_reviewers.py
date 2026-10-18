@@ -1,82 +1,98 @@
-"""Reviewer-prediction test: does Lore's graph pick the people who actually review a PR
-better than the official ownership chart?
+"""Can Lore predict who will review a PR? Everything is read from the k8s graph (main's schema).
 
-  FALKORDB_HOST=localhost python scripts/eval_reviewers.py data/k8s_repo data/prs.jsonl 2026-08-01
+    FALKORDB_HOST=localhost python scripts/eval_reviewers.py 2026-08-01
 
-Train = merged PRs before the cutoff (only those edges are used by Lore, via merged_ts < cutoff).
-Test  = merged PRs on/after the cutoff that had at least one non-author reviewer/approver.
-Truth = everyone (except the author and bots) who reviewed, /lgtm'd or /approve'd the PR.
-Metric: hit@k = share of test PRs where at least one of the top-k suggestions is in the truth set.
+Test set: every merged PR in the graph with `merged >= cutoff` that has at least one reviewer
+(REVIEWED, LGTM or APPROVED from someone other than its author).
+No peeking: Lore only sees evidence dated before the cutoff (`as_of=cutoff`).
+Metric: hit@k = share of test PRs where at least one of the top k suggestions really reviewed it.
 
-Baselines (author always excluded):
-  OWNERS-random: k people drawn at random from the OWNERS reviewers of the touched files
-                 (what Prow's auto-assigner does); exact expected value, not a sample.
-  SIG leads:     the official chairs / tech leads (sigs.yaml) of the PR's sig/* labels.
-  Most active:   the k busiest reviewers in the whole repo before the cutoff (no graph structure).
+Methods
+  lore          app.tools._knowers (the ranking behind who_knows and route_issue's people) on each
+                folder the PR TOUCHES, as of the cutoff; totals summed over folders, author excluded;
+                filled up from who_knows on the PR's FOR_TEAM team.
+  most_active   the busiest reviewers in the whole graph before the cutoff.
+  owners_approvers   k random OWNERS approvers of the touched folders (exact expected value).
+  owners_all         k random OWNERS approvers + reviewers of the touched folders (expected value).
+  sig_leads          k random official leads (sigs.yaml) of the PR's teams (expected value).
+Caveat: OWNERS files are today's (data/k8s-owners), not the ones in force at the cutoff.
 """
-import datetime as dt
 import json
-import os
 import sys
 from math import comb
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from app.graph_tools import get_graph, official_leads, suggest_reviewers  # noqa: E402
-from app.ownership import load_owners, nearest_owner_dir, official_owners, sig_team  # noqa: E402
+from app import tools
 
-BOTS = {"k8s-ci-robot", "k8s-triage-robot", "k8s-infra-ci-robot"}
+KS = (1, 3, 5)
 
 
-def p_hit_random(pool, truth, k):
-    n, m = len(pool), len(pool & truth)
-    if n == 0 or m == 0:
+def p_hit_random(n_cand, n_true_in_cand, k):
+    if n_cand == 0 or n_true_in_cand == 0:
         return 0.0
-    k = min(k, n)
-    return 1 - comb(n - m, k) / comb(n, k)
+    k = min(k, n_cand)
+    return 1.0 - comb(n_cand - n_true_in_cand, k) / comb(n_cand, k)
 
 
-def main(repo_dir, prs_path, cutoff_day, limit=None):
-    cutoff = int(dt.datetime.fromisoformat(cutoff_day + "T00:00:00+00:00").timestamp())
-    owners = load_owners(repo_dir)
-    g = get_graph()
-    test = []
-    for line in open(prs_path):
-        pr = json.loads(line)
-        if pr["merged_at"] < cutoff_day:
+def main(cutoff):
+    rows = tools._q("""MATCH (pr:PR) WHERE pr.merged >= $c
+        OPTIONAL MATCH (a:Person)-[:AUTHORED]->(pr)
+        WITH pr, collect(DISTINCT a.login) AS authors
+        MATCH (r:Person)-[:REVIEWED|LGTM|APPROVED]->(pr)
+        WITH pr, authors, collect(DISTINCT r.login) AS reviewers
+        OPTIONAL MATCH (pr)-[:TOUCHES]->(f:Folder)
+        WITH pr, authors, reviewers, collect(DISTINCT f.path) AS folders
+        OPTIONAL MATCH (pr)-[:FOR_TEAM]->(t:Team)
+        RETURN pr.num, authors, reviewers, folders, collect(DISTINCT t.key)""", c=cutoff)
+    busiest = [r[0] for r in tools._q("""MATCH (p:Person)-[e:REVIEWED|LGTM|APPROVED]->(pr:PR) WHERE e.at < $c
+        RETURN p.login, count(DISTINCT pr) AS n ORDER BY n DESC LIMIT 20""", c=cutoff)]
+    folder_rank, team_rank, approvers, owners_all, leads = {}, {}, {}, {}, {}
+
+    def ranked(cache, kind, key):
+        if key not in cache:
+            cache[key] = [(p["login"], p["total"]) for p in tools._knowers(kind, key, as_of=cutoff)["ranked"]]
+        return cache[key]
+
+    def owners_of(path):
+        if path not in approvers:
+            res = tools._q("""MATCH (p:Person)-[e:APPROVER_OF|REVIEWER_OF]->(:Folder {path:$p})
+                              RETURN p.login, type(e)""", p=path)
+            approvers[path] = {l for l, t in res if t == "APPROVER_OF"}
+            owners_all[path] = {l for l, _ in res}
+        return approvers[path], owners_all[path]
+
+    names = ("lore", "most_active", "owners_approvers", "owners_all", "sig_leads")
+    hits = {n: dict.fromkeys(KS, 0.0) for n in names}
+    n_test = 0
+    for num, authors, reviewers, folders, teams in rows:
+        truth = set(reviewers) - set(authors)
+        if not truth:
             continue
-        author = (pr["author"] or "").lower()
-        truth = {x.lower() for x in pr["reviewers"] + pr["lgtm"] + pr["approvers"]} - BOTS - {author}
-        truth = {t for t in truth if not t.endswith("[bot]")}
-        if truth:
-            test.append((pr, author, truth))
-    if limit:
-        test = test[:int(limit)]
-    ks = (1, 3, 5)
-    hits = {name: {k: 0.0 for k in ks} for name in ("lore", "owners_random", "sig_leads", "most_active")}
-    busiest = [r[0] for r in g.query("""MATCH (p:Person)-[:REVIEWED_PR|LGTM|APPROVED_PR]->(pr:PR) WHERE pr.merged_ts < $c
-                                        RETURN p.login, count(DISTINCT pr) AS n ORDER BY n DESC LIMIT 20""", {"c": cutoff}).result_set]
-    covered = 0
-    for pr, author, truth in test:
-        dirs = sorted({nearest_owner_dir(owners, f) for f in pr["files"]})
-        teams = sorted({t for t in (sig_team(lb) for lb in pr["labels"]) if t})
-        lore = [e["login"] for e in suggest_reviewers(g, dirs, teams, cutoff_ts=cutoff, exclude=[author], k=max(ks))]
-        pool = set()
-        for f in pr["files"]:
-            pool |= {x.lower() for x in official_owners(owners, f)["reviewers"]}
-        pool.discard(author)
-        leads = [x for x in official_leads(g, teams) if x != author]
-        covered += bool(lore)
-        for k in ks:
+        n_test += 1
+        score = {}
+        for path in folders:
+            for login, total in ranked(folder_rank, "folder", path):
+                score[login] = score.get(login, 0) + total
+        lore = [l for l, _ in sorted(score.items(), key=lambda x: -x[1]) if l not in authors]
+        for team in teams:
+            lore += [l for l, _ in ranked(team_rank, "team", team) if l not in authors and l not in lore]
+        active = [b for b in busiest if b not in authors]
+        appr = set().union(*(owners_of(p)[0] for p in folders)) - set(authors) if folders else set()
+        alls = set().union(*(owners_of(p)[1] for p in folders)) - set(authors) if folders else set()
+        for t in teams:
+            if t not in leads:
+                leads[t] = {x["login"] for x in tools._leads(t)}
+        ld = set().union(*(leads[t] for t in teams)) - set(authors) if teams else set()
+        for k in KS:
             hits["lore"][k] += bool(set(lore[:k]) & truth)
-            hits["owners_random"][k] += p_hit_random(pool, truth, k)
-            hits["sig_leads"][k] += bool(set(leads[:k]) & truth)
-            hits["most_active"][k] += bool(set([b for b in busiest if b != author][:k]) & truth)
-    n = len(test)
-    result = {"cutoff": cutoff_day, "test_prs": n, "lore_had_suggestions": covered,
-              "hit_at_k": {name: {f"@{k}": round(v[k] / n, 3) for k in ks} for name, v in hits.items()}}
-    print(json.dumps(result, indent=2))
-    return result
+            hits["most_active"][k] += bool(set(active[:k]) & truth)
+            hits["owners_approvers"][k] += p_hit_random(len(appr), len(appr & truth), k)
+            hits["owners_all"][k] += p_hit_random(len(alls), len(alls & truth), k)
+            hits["sig_leads"][k] += p_hit_random(len(ld), len(ld & truth), k)
+    out = {"cutoff": cutoff, "test_prs": n_test,
+           "scope": "merged kubernetes/kubernetes PRs of the 5 slice teams in the graph, merged on/after cutoff",
+           "hit_at_k": {n: {f"@{k}": round(v / max(n_test, 1), 3) for k, v in h.items()} for n, h in hits.items()}}
+    print(json.dumps(out, indent=2))
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:5])
+    main(sys.argv[1] if len(sys.argv) > 1 else "2026-08-01")

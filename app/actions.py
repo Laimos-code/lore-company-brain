@@ -2,11 +2,14 @@
 
 Implements the Approve button action, triage routing, and decision pings.
 """
+import asyncio
+import logging
 import os
-from datetime import datetime, timezone
+import time
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -34,7 +37,7 @@ class ApproveActionResponse(BaseModel):
     details: Dict[str, Any]
 
 
-@router.post("/approve", response_model=ApproveActionResponse)
+@router.post("/approve", response_model=ApproveActionResponse, deprecated=True)
 async def approve_action(req: ApproveActionRequest) -> ApproveActionResponse:
     """Approve a proposed recommendation, triage routing, or stale decision ping."""
     applied_at = datetime.now(timezone.utc).isoformat()
@@ -94,11 +97,46 @@ def _demo_config() -> tuple:
     token = os.getenv("DEMO_GITHUB_TOKEN", "").strip()
     if not repo or repo.count("/") != 1:
         raise ValueError("DEMO_REPO is not set (expected owner/repo)")
-    if repo.lower().startswith("kubernetes/"):
-        raise ValueError("Refusing to act on a kubernetes/ repository")
+    owner = repo.split("/", 1)[0].lower()
+    allowed_owner = (os.getenv("DEMO_REPO_OWNER") or "Laimos-code").strip().lower()
+    if owner.startswith("kubernetes") or owner != allowed_owner:
+        raise ValueError("Refusing to act on a repository outside the demo owner")
     if not token:
         raise ValueError("DEMO_GITHUB_TOKEN is not set")
     return repo, token
+
+
+log = logging.getLogger("lore.actions")
+APPROVE_PER_MINUTE = 3
+ROUTE_PER_MINUTE = 10
+DEMO_ISSUES_TTL_S = 60.0
+_limiters: Dict[str, Any] = {}
+_daily = {"day": None, "posts": 0}
+_issues_cache: Dict[str, Any] = {"at": 0.0, "repo": None, "issues": None}
+
+
+def _err(status: int, message: str) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"ok": False, "error": message})
+
+
+async def _limited(request: Request, name: str, per_minute: int) -> bool:
+    """True if this visitor is over the per-minute limit for `name` (reuses main's limiter and IP rule)."""
+    from app.main import SlidingWindowRateLimiter, get_client_ip
+    if name not in _limiters:
+        _limiters[name] = SlidingWindowRateLimiter(max_requests=per_minute, window_seconds=60.0)
+    return not await _limiters[name].is_allowed(get_client_ip(request))
+
+
+def _daily_cap_reached() -> bool:
+    cap = int(os.getenv("APPROVE_DAILY_CAP") or "50")
+    if _daily["day"] != date.today():
+        _daily.update(day=date.today(), posts=0)
+    return _daily["posts"] >= cap
+
+
+def _passcode_ok(request: Request) -> bool:
+    expected = os.getenv("APPROVE_PASSCODE") or ""
+    return not expected or request.headers.get("x-approve-passcode", "") == expected
 
 
 def _headers(token: str) -> Dict[str, str]:
@@ -119,11 +157,14 @@ def _gh_error(resp: httpx.Response) -> str:
 
 @demo_router.get("/demo-issues")
 async def list_demo_issues():
-    """List open issues (not PRs) in the practice repo."""
+    """List open issues (not PRs) in the practice repo. Cached for 60 s to save the token's quota."""
     try:
         repo, token = _demo_config()
     except ValueError as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        log.error("demo config: %s", e)
+        return _err(500, "Demo repo is not configured")
+    if _issues_cache["repo"] == repo and time.time() - _issues_cache["at"] < DEMO_ISSUES_TTL_S:
+        return _issues_cache["issues"]
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(
             f"{GITHUB_API}/repos/{repo}/issues",
@@ -131,68 +172,86 @@ async def list_demo_issues():
             params={"state": "open", "per_page": 100},
         )
     if resp.status_code != 200:
-        return JSONResponse(status_code=502, content={"ok": False, "error": _gh_error(resp)})
-    return [
+        log.error("list issues: %s", _gh_error(resp))
+        return _err(502, "GitHub request failed")
+    issues = [
         {"number": i["number"], "title": i["title"], "body": i.get("body") or "", "url": i["html_url"]}
         for i in resp.json()
         if "pull_request" not in i
     ]
+    _issues_cache.update(at=time.time(), repo=repo, issues=issues)
+    return issues
 
 
 @demo_router.post("/approve")
-async def approve_issue(req: ApproveIssueRequest):
-    """Human-approved triage: post the comment and apply allowed labels + triage/lore-suggested."""
+async def approve_issue(req: ApproveIssueRequest, request: Request):
+    """Human-approved triage: post the comment and apply allowed labels + triage/lore-suggested.
+    Limited to 3 posts/min per visitor and APPROVE_DAILY_CAP (default 50) per day; requires the
+    X-Approve-Passcode header when APPROVE_PASSCODE is set."""
+    if not _passcode_ok(request):
+        return _err(403, "Wrong or missing approve passcode")
+    if await _limited(request, "approve", APPROVE_PER_MINUTE):
+        return _err(429, "Too many approvals, try again in a minute")
+    if _daily_cap_reached():
+        return _err(429, "Daily approval limit reached")
     try:
         repo, token = _demo_config()
     except ValueError as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        log.error("demo config: %s", e)
+        return _err(500, "Demo repo is not configured")
 
     comment = req.comment.strip()
     if not comment:
-        return JSONResponse(status_code=400, content={"ok": False, "error": "Comment is empty"})
+        return _err(400, "Comment is empty")
     if len(comment) > MAX_COMMENT_CHARS:
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "error": f"Comment exceeds {MAX_COMMENT_CHARS} characters"},
-        )
+        return _err(400, f"Comment exceeds {MAX_COMMENT_CHARS} characters")
     bad = [label for label in req.labels if label not in ALLOWED_LABELS]
     if bad:
-        return JSONResponse(status_code=400, content={"ok": False, "error": f"Labels not allowed: {bad}"})
+        return _err(400, f"Labels not allowed: {bad}")
     labels = list(dict.fromkeys(req.labels + [LORE_LABEL]))
 
     base = f"{GITHUB_API}/repos/{repo}/issues/{req.issue_number}"
     async with httpx.AsyncClient(timeout=15.0, headers=_headers(token)) as client:
         c_resp = await client.post(f"{base}/comments", json={"body": comment})
         if c_resp.status_code != 201:
-            return JSONResponse(status_code=502, content={"ok": False, "error": _gh_error(c_resp)})
+            log.error("post comment: %s", _gh_error(c_resp))
+            return _err(502, "GitHub refused the comment")
+        _daily["posts"] += 1
         l_resp = await client.post(f"{base}/labels", json={"labels": labels})
         if l_resp.status_code != 200:
-            return JSONResponse(
-                status_code=502,
-                content={"ok": False, "error": "Comment posted but labelling failed: " + _gh_error(l_resp)},
-            )
+            log.error("add labels: %s", _gh_error(l_resp))
+            return _err(502, "Comment posted but labelling failed")
     return {"ok": True, "comment_url": c_resp.json()["html_url"]}
 
 
 @demo_router.get("/route-issue/{issue_number}")
-async def route_demo_issue(issue_number: int):
-    """Lore's suggestion (team, label, reviewers, draft comment) for a practice-repo issue. Nothing is posted."""
+async def route_demo_issue(issue_number: int, request: Request):
+    """Lore's suggestion (team, label, people, draft comment) for a practice-repo issue, from
+    app.tools.route_issue (Cypher on the k8s graph). Nothing is posted."""
+    if await _limited(request, "route", ROUTE_PER_MINUTE):
+        return _err(429, "Too many requests, try again in a minute")
     try:
         repo, token = _demo_config()
     except ValueError as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        log.error("demo config: %s", e)
+        return _err(500, "Demo repo is not configured")
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(f"{GITHUB_API}/repos/{repo}/issues/{issue_number}", headers=_headers(token))
     if resp.status_code != 200:
-        return JSONResponse(status_code=502, content={"ok": False, "error": _gh_error(resp)})
+        log.error("get issue: %s", _gh_error(resp))
+        return _err(502, "GitHub request failed")
     issue = resp.json()
     try:
-        import asyncio
-        from app import graph_tools
-        allowed = sorted("sig-" + label.split("/", 1)[1] for label in ALLOWED_LABELS)
-        suggestion = await asyncio.to_thread(
-            graph_tools.route_issue, graph_tools.get_graph(), issue["title"], issue.get("body") or "", allowed)
-    except Exception as e:
-        return JSONResponse(status_code=503, content={"ok": False, "error": f"Graph unavailable: {e}"})
+        from app import tools
+        env = await asyncio.to_thread(tools.route_issue, issue["title"], issue.get("body") or "")
+    except Exception:
+        log.exception("route_issue failed")
+        return _err(503, "Graph unavailable")
+    data = env.get("data") or {}
+    label = data.get("label")
     return {"ok": True, "issue": {"number": issue["number"], "title": issue["title"], "url": issue["html_url"]},
-            **suggestion, "labels": [suggestion["label"]] if suggestion.get("label") else []}
+            "summary": env.get("summary"), "team": data.get("team"),
+            "team_scores": data.get("team_scores", []), "people": data.get("suggested_people", []),
+            "related_keps": data.get("related_keps", []), "comment": data.get("draft_comment", ""),
+            "labels": [label] if label in ALLOWED_LABELS else [], "sources": env.get("sources", []),
+            "evidence": env.get("evidence"), "is_stub": env.get("is_stub", False)}
