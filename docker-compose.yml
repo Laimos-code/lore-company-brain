@@ -38,6 +38,14 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-}
+      # Live Triage (practice repo only) and its safety limits; empty = off / default
+      - DEMO_REPO=${DEMO_REPO:-}
+      - DEMO_GITHUB_TOKEN=${DEMO_GITHUB_TOKEN:-}
+      - DEMO_REPO_OWNER=${DEMO_REPO_OWNER:-}
+      - APPROVE_PASSCODE=${APPROVE_PASSCODE:-}
+      - APPROVE_DAILY_CAP=${APPROVE_DAILY_CAP:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
+      - USE_STUBS=${USE_STUBS:-}
     networks:
       - lore-net
 
