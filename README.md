@@ -24,7 +24,7 @@ Every organization has two org charts:
 - **Same gap in code review**: In each of the 5 teams we loaded, 5 or 6 of the top 8 PR reviewers are not that team's official leaders. `liggitt` (a SIG Auth lead) is a top-2 reviewer in all five.
 - **Decision Trail & Replacements**: Traces decisions across an 8-year evolution (e.g. *Coscheduling* (KEP-583, 2018) &rarr; *Gang Scheduling* (KEP-4671, 2025) &rarr; *Decouple PodGroup API* (KEP-5832, 2026)).
 - **Stale Decision Catch**: Surfaces decisions marked `implementable` at alpha stage that have gone untouched for 8+ releases.
-- **Actionable Routing**: Triage incoming issues to the real experts and approve actions via `/api/actions/approve`.
+- **Actionable Routing**: Triage incoming issues to the real experts and a person approves the draft before it is posted (`/api/route-issue/{n}` then `/api/approve`).
 
 ---
 
@@ -248,6 +248,27 @@ To host Lore on a small cloud server (DigitalOcean, AWS EC2, Hetzner, or GitHub 
 
 ---
 
+## 📊 Evaluation: predicting real reviewers
+
+`FALKORDB_HOST=localhost python scripts/eval_reviewers.py 2026-08-01` reads everything from the graph.
+Test set: merged PRs of the 5 slice teams with `merged >= 2026-08-01` that have a reviewer other than the
+author. No peeking: for each test PR, Lore only sees evidence dated before the day that PR was opened, so a
+PR's own reviews never help predict it. hit@k = share of test PRs where at least one of
+the top k suggestions really reviewed, `/lgtm`-ed or `/approve`-d it. This is the scope of the number, not an
+overall accuracy claim. Caveat: OWNERS files are today's, not the ones in force at the cutoff.
+
+| Method (446 test PRs) | hit@1 | hit@3 | hit@5 |
+| :--- | ---: | ---: | ---: |
+| **Lore** (`_knowers` on touched folders, then team) | 50% | 77% | 84% |
+| Busiest reviewers before the PR was opened | 18% | 43% | 57% |
+| Random OWNERS approvers of touched folders | 6% | 16% | 27% |
+| Random OWNERS approvers + reviewers | 4% | 13% | 21% |
+| Random official SIG leads of the PR's team | 12% | 34% | 45% |
+
+Raw output: [`docs/eval_reviewers.json`](docs/eval_reviewers.json).
+
+---
+
 ## 📡 API Reference
 
 | Method | Endpoint | Description |
@@ -255,8 +276,11 @@ To host Lore on a small cloud server (DigitalOcean, AWS EC2, Hetzner, or GitHub 
 | `GET` | `/` | Serves the interactive web interface (`web/index.html`). |
 | `GET` | `/api/health` | Returns service health & FalkorDB connection status (`{"ok": true, "falkordb": true}`). |
 | `POST` | `/api/ask` | Queries Lore brain with 60-second timeout guard and 20 req/min rate limit per IP. |
-| `POST` | `/api/actions/approve` | Approves an issue routing triage, draft comment, or decision ping. |
+| `POST` | `/api/actions/approve` | Deprecated stub kept for the contract; posts nothing. |
 | `GET` | `/api/actions/history` | Lists approved action history. |
+| `GET` | `/api/demo-issues` | Lists open issues in the practice repo (`DEMO_REPO`). |
+| `GET` | `/api/route-issue/{n}` | `app.tools.route_issue` on a practice issue: team, `sig/*` label, people, draft comment. Posts nothing. 10/min per visitor. |
+| `POST` | `/api/approve` | Human-approved triage: posts the comment and adds allowed `sig/*` labels plus `triage/lore-suggested`. 3/min per visitor, `APPROVE_DAILY_CAP`/day, optional `APPROVE_PASSCODE`; only `DEMO_REPO_OWNER` repos. |
 
 See [`docs/tool_contract.md`](docs/tool_contract.md) for full JSON request and response payloads.
 
