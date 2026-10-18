@@ -167,3 +167,25 @@ def test_approve_rate_limited_and_passcode(monkeypatch):
     codes = [client.post("/api/approve", json=bad, headers={"X-Approve-Passcode": "s3cret"}).status_code
              for _ in range(10)]
     assert codes[:3] == [400, 400, 400] and set(codes[3:]) == {429}
+
+
+def test_brain_routes_kep_questions_to_that_kep():
+    """'Who owns KEP-4671?' must answer about KEP-4671 itself, listing its team leaders and approvers."""
+    if not _graph_loaded():
+        pytest.skip("graph not loaded")
+    from app import brain
+    owns = brain.answer("Who owns KEP-4671?")
+    assert owns["tool"] == "who_owns" and owns["data"]["thing"]["num"] == "4671"
+    roles = {o["login"]: o["role"] for o in owns["official_owners"]}
+    assert "KEP approver" in roles.get("dom4ha", "") and "sig-scheduling" in roles.get("macsko", "")
+    knows = brain.answer("Who knows KEP-4671?")
+    assert knows["tool"] == "who_knows" and knows["data"]["thing"]["num"] == "4671" and knows["actual_knowers"]
+    assert brain.answer("Tell me about KEP 4671")["data"]["kep"]["num"] == "4671"
+
+
+def test_page_never_puts_data_into_html():
+    """Answer rows are built with textContent: no innerHTML template that inserts ${...} values."""
+    import pathlib
+    import re
+    page = (pathlib.Path(__file__).resolve().parent.parent / "web" / "index.html").read_text(encoding="utf-8")
+    assert not re.findall(r"innerHTML\s*=\s*`[^`]*\$\{", page)

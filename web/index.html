@@ -724,16 +724,20 @@
 
       stubIndicator.style.display = data.is_stub ? 'inline-block' : 'none';
 
+      // Names, titles and roles come from the graph, so rows are built with textContent, never as HTML.
+      function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      }
+
       // Render Owners
       ownersList.innerHTML = '';
       if (data.official_owners && data.official_owners.length) {
         data.official_owners.forEach(o => {
-          const li = document.createElement('li');
-          li.className = 'person-row';
-          li.innerHTML = `
-            <span class="person-name">@${o.login}</span>
-            <span class="person-role">${o.role || 'official lead'}</span>
-          `;
+          const li = el('li', 'person-row');
+          li.append(el('span', 'person-name', '@' + o.login), el('span', 'person-role', o.role || 'official lead'));
           ownersList.appendChild(li);
         });
       } else {
@@ -744,15 +748,13 @@
       knowersList.innerHTML = '';
       if (data.actual_knowers && data.actual_knowers.length) {
         data.actual_knowers.forEach(k => {
-          const li = document.createElement('li');
-          li.className = 'person-row';
-          const badge = !k.is_official 
-            ? '<span class="hidden-knower-badge">Not on Org Chart</span>' 
-            : '<span style="font-size:0.75rem; color:var(--text-dim)">Official</span>';
-          li.innerHTML = `
-            <span class="person-name">@${k.login} ${badge}</span>
-            <span class="person-role">${k.decisions_count ? k.decisions_count + ' decisions' : 'expert'}</span>
-          `;
+          const li = el('li', 'person-row');
+          const name = el('span', 'person-name', '@' + k.login + ' ');
+          const badge = k.is_official ? el('span', null, 'Official') : el('span', 'hidden-knower-badge', 'Not on Org Chart');
+          if (k.is_official) badge.style.cssText = 'font-size:0.75rem; color:var(--text-dim)';
+          name.appendChild(badge);
+          // decisions_count = KEP decisions plus PR work (authored / reviewed / lgtm / approved)
+          li.append(name, el('span', 'person-role', k.decisions_count ? k.decisions_count + ' decisions & PRs' : 'expert'));
           knowersList.appendChild(li);
         });
       } else {
@@ -764,9 +766,10 @@
         timelineView.style.display = 'block';
         timelineSteps.innerHTML = '';
         data.decision_trail.forEach(d => {
-          const div = document.createElement('div');
-          div.className = 'timeline-step';
-          div.innerHTML = `<strong>${d.kep} (${d.title})</strong> &bull; <span style="color:var(--text-muted); font-size:0.8rem;">${d.date} [${d.status}]</span>`;
+          const div = el('div', 'timeline-step');
+          const meta = el('span', null, `${d.date} [${d.status}]`);
+          meta.style.cssText = 'color:var(--text-muted); font-size:0.8rem;';
+          div.append(el('strong', null, `${d.kep} (${d.title})`), ' • ', meta);
           timelineSteps.appendChild(div);
         });
       } else {

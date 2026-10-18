@@ -3,6 +3,7 @@
 Implements the Approve button action, triage routing, and decision pings.
 """
 import asyncio
+import hmac
 import logging
 import os
 import time
@@ -136,7 +137,9 @@ def _daily_cap_reached() -> bool:
 
 def _passcode_ok(request: Request) -> bool:
     expected = os.getenv("APPROVE_PASSCODE") or ""
-    return not expected or request.headers.get("x-approve-passcode", "") == expected
+    given = request.headers.get("x-approve-passcode", "")
+    # compare_digest takes the same time however many characters match, so guessing gets no hints
+    return not expected or hmac.compare_digest(given.encode(), expected.encode())
 
 
 def _headers(token: str) -> Dict[str, str]:
