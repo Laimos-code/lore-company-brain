@@ -122,34 +122,37 @@ def test_two_tool_calls_in_one_response():
     assert len(edge_keys) == len(set(edge_keys))
 
 
-def test_answer_cites_nonexistent_source_and_renumbers():
-    """Verify nonexistent citations like [9] are removed, uncited sources dropped, and remaining renumbered."""
+def test_answer_preserves_non_source_brackets_and_renumbers():
+    """Verify non-source brackets like [2019-2021] and [2024] are kept while real sources are renumbered."""
     script = [
         MockMessage(
             tool_calls=[MockToolCall("call_1", "who_owns", {"thing": "sig-node"})]
         ),
-        # Returns citation [9] (nonexistent) and citation [2] (real 2nd source in stub)
+        # Returns [2019-2021] (year range), [2024] (year), and [2] (real 2nd source in stub)
         MockMessage(
-            content="Based on nonexistent data [9], and confirmed by leadership [2]."
+            content="Since [2019-2021] it changed [2]. In [2024] new rules applied."
         ),
     ]
     client = ScriptedLLMClient(script)
 
     result = agent.ask("Test citation cleanup", client=client)
 
-    # Citation [9] must be removed
-    assert "[9]" not in result["answer"]
+    # Non-source brackets must be preserved
+    assert "[2019-2021]" in result["answer"]
+    assert "[2024]" in result["answer"]
 
-    # Sources must be renumbered 1..k based on first citation
+    # Real sources renumbered 1..k
     assert len(result["sources"]) == 1
     assert result["sources"][0]["n"] == 1
     assert "[1]" in result["answer"]
+    # No stray spaces before punctuation
+    assert "[1]." in result["answer"]
 
 
-def test_tool_raises_error_handled_gracefully(monkeypatch):
-    """Verify that if a tool raises, error is passed back to model and ask() returns valid response."""
+def test_all_tool_calls_failed_returns_none(monkeypatch):
+    """If every tool call fails (e.g. FalkorDB is down), ask() returns None to allow stub fallback."""
     def broken_who_owns(**kwargs):
-        raise RuntimeError("FalkorDB connection refused")
+        raise RuntimeError("Connection refused")
 
     monkeypatch.setitem(agent.TOOL_CALLABLES, "who_owns", broken_who_owns)
 
@@ -157,19 +160,39 @@ def test_tool_raises_error_handled_gracefully(monkeypatch):
         MockMessage(
             tool_calls=[MockToolCall("call_1", "who_owns", {"thing": "sig-node"})]
         ),
-        MockMessage(
-            content="I encountered a database error checking SIG Node, so I checked our fallback records."
-        ),
+        MockMessage(content="The data does not show it."),
     ]
     client = ScriptedLLMClient(script)
 
     result = agent.ask("Who owns SIG Node?", client=client)
+    # Must return None so server can fall back to the stub
+    assert result is None
 
-    assert len(result["steps"]) == 1
-    assert "FalkorDB connection refused" in result["steps"][0]["summary"]
-    assert "database error" in result["answer"]
-    assert isinstance(result["evidence"]["nodes"], list)
-    assert isinstance(result["evidence"]["edges"], list)
+
+def test_partial_tool_error_masks_raw_error_text(monkeypatch):
+    """When a tool fails, steps[].summary shows a generic message rather than raw host/port errors."""
+    def broken_who_owns(**kwargs):
+        raise RuntimeError("Error 111 connecting to localhost:6379")
+
+    monkeypatch.setitem(agent.TOOL_CALLABLES, "who_owns", broken_who_owns)
+
+    script = [
+        MockMessage(
+            tool_calls=[
+                MockToolCall("call_1", "who_owns", {"thing": "sig-node"}),
+                MockToolCall("call_2", "who_knows", {"thing": "sig-node"}),
+            ]
+        ),
+        MockMessage(content="Found active knowers [1] despite who_owns failure."),
+    ]
+    client = ScriptedLLMClient(script)
+
+    result = agent.ask("Who owns vs knows SIG Node?", client=client)
+    assert result is not None
+    # Raw connection text must NOT leak into summary
+    assert "localhost:6379" not in result["steps"][0]["summary"]
+    assert result["steps"][0]["summary"] == "Tool execution failed."
+
 
 
 def test_stops_at_six_tool_calls_and_forces_answer():
@@ -305,15 +328,20 @@ def test_non_dict_tool_arguments_handled_gracefully():
             CustomMockToolCall("call_list", "who_owns", "[\"item\"]"),
             CustomMockToolCall("call_str", "who_owns", "\"just string\""),
         ]),
-        MockMessage(content="Handled non-dict tool args safely."),
+        MockMessage(tool_calls=[
+            MockToolCall("call_valid", "who_owns", {"thing": "sig-node"}),
+        ]),
+        MockMessage(content="Handled non-dict tool args safely and found leaders [1]."),
     ]
     client = ScriptedLLMClient(script)
 
     result = agent.ask("Test malformed args", client=client)
     assert result is not None
-    assert len(result["steps"]) == 3
-    for step in result["steps"]:
-        assert step["input"] == {}
+    assert len(result["steps"]) == 4
+    for i in range(3):
+        assert result["steps"][i]["input"] == {}
+    assert result["steps"][3]["input"] == {"thing": "sig-node"}
+
 
 
 def test_grouped_citations_expanded_and_renumbered():
@@ -374,3 +402,19 @@ def test_slow_client_respects_deadline_timeout(monkeypatch):
     assert len(recorded_timeouts) > 0
     # Remaining time is 55 - 30 = 25s, so timeout should be 25s
     assert recorded_timeouts[0] <= 25.0
+
+
+def test_format_page_fields_excludes_folder_reviewers():
+    """Verify that folder reviewers are NOT included in official_owners (only approvers)."""
+    fake_tool_res = [{
+        "tool": "who_owns",
+        "data": {
+            "approvers": [{"login": "alice", "source": "pkg/OWNERS"}],
+            "reviewers": [{"login": "bob", "source": "pkg/OWNERS"}],
+        }
+    }]
+    owners, knowers, trail = agent.format_page_fields(fake_tool_res)
+    owner_logins = [o["login"] for o in owners]
+    assert "alice" in owner_logins
+    assert "bob" not in owner_logins
+

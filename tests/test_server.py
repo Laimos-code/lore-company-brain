@@ -68,6 +68,14 @@ def test_ask_without_llm_key():
     assert "answer" in data
 
 
+def test_ask_rejects_question_over_2000_chars():
+    """Questions longer than 2000 characters are rejected with 422 Unprocessable Entity."""
+    long_q = "Who owns SIG Node? " * 150  # > 2800 chars
+    response = client.post("/api/ask", json={"question": long_q})
+    assert response.status_code == 422
+
+
+
 @pytest.mark.parametrize("failure", [RuntimeError("Connection error."), TimeoutError()])
 def test_ask_falls_back_to_graph_when_agent_fails(monkeypatch, failure):
     """If the AI model fails (bad key, rate limit, outage, too slow), /api/ask still answers

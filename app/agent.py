@@ -172,8 +172,8 @@ def _call_model_with_retry(client: OpenAI, kwargs: Dict[str, Any], start_time: f
         raise
 
 
-def _expand_grouped_citations(text: str) -> str:
-    """Expand grouped or ranged citations like [1, 2] or [1-3] into [1][2][3]."""
+def _expand_grouped_citations(text: str, valid_source_ids: set) -> str:
+    """Expand grouped or ranged citations like [1, 2] or [1-3] into [1][2][3] ONLY for real source IDs."""
     def expand_bracket(match: re.Match) -> str:
         inner = match.group(1).strip()
         parts = re.split(r"[,;]\s*", inner)
@@ -184,12 +184,21 @@ def _expand_grouped_citations(text: str) -> str:
             if range_match:
                 start, end = int(range_match.group(1)), int(range_match.group(2))
                 if start <= end and end - start <= 20:
-                    nums.extend(range(start, end + 1))
+                    r_nums = list(range(start, end + 1))
+                    if any(n in valid_source_ids for n in r_nums):
+                        nums.extend(r_nums)
+                    else:
+                        return match.group(0)
                 else:
-                    nums.append(start)
-                    nums.append(end)
+                    return match.group(0)
             elif part.isdigit():
-                nums.append(int(part))
+                val = int(part)
+                if val in valid_source_ids:
+                    nums.append(val)
+                else:
+                    return match.group(0)
+            else:
+                return match.group(0)
         if nums:
             return "".join(f"[{n}]" for n in nums)
         return match.group(0)
@@ -199,10 +208,12 @@ def _expand_grouped_citations(text: str) -> str:
 
 def _clean_citations_and_renumber(raw_answer: str, global_sources: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
     """Validate citations, drop uncited sources, and renumber remaining sources 1..k in order of appearance."""
-    # First expand any grouped or ranged citations e.g. [1, 2] -> [1][2]
-    expanded_answer = _expand_grouped_citations(raw_answer)
-
     sources_by_gid = {s["global_id"]: s for s in global_sources}
+    valid_source_ids = set(sources_by_gid.keys())
+
+    # Only expand brackets that refer to real source IDs; leave other brackets alone
+    expanded_answer = _expand_grouped_citations(raw_answer, valid_source_ids)
+
     cited_numbers = [int(m) for m in re.findall(r"\[(\d+)\]", expanded_answer)]
 
     # Identify valid citations in order of first appearance
@@ -218,10 +229,12 @@ def _clean_citations_and_renumber(raw_answer: str, global_sources: List[Dict[str
         num = int(match.group(1))
         if num in remap:
             return f"[{remap[num]}]"
-        return ""
+        # Only rewrite numbers that are real source IDs; leave other brackets alone
+        return match.group(0)
 
     cleaned_answer = re.sub(r"\[(\d+)\]", replace_citation, expanded_answer)
-    cleaned_answer = re.sub(r"[ \t]+", " ", cleaned_answer).strip()
+    cleaned_answer = re.sub(r"[ \t]+", " ", cleaned_answer)
+    cleaned_answer = re.sub(r"\s+([.,;:!?])", r"\1", cleaned_answer).strip()
 
     final_sources = []
     for new_num, old_id in enumerate(valid_cited_order, start=1):
@@ -299,62 +312,51 @@ def _merge_evidence_for_map(tool_results: List[Dict[str, Any]], cited_sources: L
 
 
 def format_page_fields(tool_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Convert raw tool data rows into the field names expected by the web page."""
-    official_owners = []
-    actual_knowers = []
-    decision_trail = []
+    """Convert raw tool data rows into the field names expected by the web page, reusing brain._official_owners."""
+    from app import brain
 
+    official_owners: List[Dict[str, Any]] = []
     seen_owners = set()
+    actual_knowers: List[Dict[str, Any]] = []
     seen_knowers = set()
+    decision_trail: List[Dict[str, Any]] = []
     seen_trail = set()
 
     for tr in tool_results:
         data = tr.get("data") or {}
 
-        # 1. Official owners: handle data.official_owners, data.owners, data.team_leads, data.approvers, data.reviewers
-        owners_sources = [
-            (data.get("official_owners") or [], "official owner"),
-            (data.get("owners") or [], "official lead"),
-            (data.get("team_leads") or [], "team lead"),
-            (data.get("approvers") or [], "approver"),
-            (data.get("reviewers") or [], "reviewer"),
-        ]
-        for raw_list, default_role in owners_sources:
-            for o in raw_list:
-                if isinstance(o, dict) and o.get("login"):
-                    login = o["login"]
-                    if login not in seen_owners:
-                        seen_owners.add(login)
-                        role = o.get("role") or (", ".join(o.get("roles") or []) if o.get("roles") else default_role)
-                        official_owners.append({"login": login, "role": role})
+        # 1. Official owners: reuse brain._official_owners so folder reviewers are excluded and roles formatted
+        for o in brain._official_owners(data):
+            login = o.get("login")
+            if login and login not in seen_owners:
+                seen_owners.add(login)
+                official_owners.append(o)
 
-        # 2. Actual knowers: is_official from is_official_owner, decisions_count from total
+        # 2. Actual knowers: same mapping as brain.py
         for p in data.get("people") or []:
-            if isinstance(p, dict) and p.get("login"):
-                login = p["login"]
-                if login not in seen_knowers:
-                    seen_knowers.add(login)
-                    actual_knowers.append({
-                        "login": login,
-                        "is_official": bool(p.get("is_official_owner", False)),
-                        "decisions_count": int(p.get("total", 0)),
-                    })
+            login = p.get("login")
+            if login and login not in seen_knowers:
+                seen_knowers.add(login)
+                actual_knowers.append({
+                    "login": login,
+                    "is_official": p.get("is_official_owner", False),
+                    "decisions_count": p.get("total", 0),
+                })
 
-        # 3. Decision trail: kep from ref, date from created[:7]
+        # 3. Decision trail: same mapping as brain.py
         for k in data.get("trail") or []:
-            if isinstance(k, dict):
-                kep_ref = k.get("ref") or (f"KEP-{k['num']}" if k.get("num") else k.get("kep", ""))
-                if kep_ref and kep_ref not in seen_trail:
-                    seen_trail.add(kep_ref)
-                    created_date = str(k.get("created") or k.get("date") or "")[:7]
-                    decision_trail.append({
-                        "kep": kep_ref,
-                        "title": k.get("title", ""),
-                        "date": created_date,
-                        "status": k.get("status") or "",
-                    })
+            ref = k.get("ref")
+            if ref and ref not in seen_trail:
+                seen_trail.add(ref)
+                decision_trail.append({
+                    "kep": ref,
+                    "title": k.get("title", ""),
+                    "date": (k.get("created") or "")[:7],
+                    "status": k.get("status") or "",
+                })
 
     return official_owners, actual_knowers[:8], decision_trail
+
 
 
 def ask(question: str, client: Optional[OpenAI] = None) -> Optional[Dict[str, Any]]:
@@ -448,10 +450,11 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Optional[Dict[str, An
                     try:
                         tool_res = tool_fn(**clean_args)
                     except Exception as e:
+                        logging.exception("[Lore Agent] Tool '%s' execution failed: %s", func_name, e)
                         tool_res = {
                             "tool": func_name,
-                            "summary": f"Tool execution failed: {str(e)}",
-                            "data": {"error": str(e)},
+                            "summary": "Tool execution failed.",
+                            "data": {"error": "Tool execution failed"},
                             "evidence": {"nodes": [], "edges": []},
                             "sources": [],
                             "is_stub": False,
@@ -490,14 +493,14 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Optional[Dict[str, An
                     ref_title = s.get("ref") or s.get("title") or "Source"
                     tool_source_citations.append(f"[{gid}] {ref_title}")
 
-                # Compact payload truncated to ~3000 chars
+                # Compact payload truncated to ~8000 chars if exceedingly large
                 compact_payload = json.dumps(
                     {"summary": tool_res.get("summary", ""), "data": tool_res.get("data", {})},
                     separators=(",", ":"),
                     default=str,
                 )
-                if len(compact_payload) > 3000:
-                    compact_payload = compact_payload[:3000] + "...(truncated)"
+                if len(compact_payload) > 8000:
+                    compact_payload = compact_payload[:8000] + "...(truncated)"
 
                 sources_annotation = ""
                 if tool_source_citations:
@@ -516,11 +519,17 @@ def ask(question: str, client: Optional[OpenAI] = None) -> Optional[Dict[str, An
                     "content": "skipped: tool limit reached",
                 })
 
+    # If all tool calls failed (e.g. FalkorDB is down), return None so server falls back to stub
+    if tool_results and all("error" in (res.get("data") or {}) for res in tool_results):
+        logging.warning("[Lore Agent] All tool calls failed; returning None to allow fallback to graph/stub.")
+        return None
+
     # If reached loop max or forced exit, request final answer with tools + tool_choice="none"
     if not final_content:
         remaining_budget = max(1.0, min(30.0, 55.0 - (time.time() - start_time)))
         force_kwargs = {
             "model": model_name,
+
             "messages": messages,
             "temperature": temperature,
             "tools": TOOL_DEFINITIONS,

@@ -119,7 +119,7 @@ def get_client_ip(request: Request) -> str:
 
 # ── Models ──────────────────────────────────────────────────────────
 class AskRequest(BaseModel):
-    question: str = Field(..., min_length=1, description="Question about Kubernetes teams, decisions, or ownership")
+    question: str = Field(..., min_length=1, max_length=2000, description="Question about Kubernetes teams, decisions, or ownership")
 
 
 # ── FalkorDB Health Check Helper ────────────────────────────────────
