@@ -153,7 +153,7 @@ def test_demo_approve_refuses_kubernetes_repo(monkeypatch):
     monkeypatch.setenv("DEMO_GITHUB_TOKEN", "dummy")
     resp = client.post("/api/approve", json={"issue_number": 1, "comment": "hi", "labels": ["sig/node"]})
     assert resp.json()["ok"] is False
-    assert resp.status_code == 503
+    assert resp.status_code == 403 and resp.json()["error"] == "This repo is not allowed"
 
 
 def test_demo_approve_rejects_bad_label_and_long_comment(monkeypatch):
@@ -259,3 +259,12 @@ def test_brain_routes_a_pasted_issue_and_returns_its_draft():
     assert a["tool"] == "route_issue" and a["draft"]["comment"] and a["draft"]["label"]
     assert a["steps"][0]["tool"] == "route_issue"
     assert brain.answer("Who really works on sig-scheduling?")["steps"][0]["tool"] == "who_knows"
+
+
+def test_demo_issues_unconfigured_is_503(monkeypatch):
+    monkeypatch.delenv("DEMO_REPO", raising=False)
+    monkeypatch.delenv("DEMO_GITHUB_TOKEN", raising=False)
+    assert client.get("/api/demo-issues").status_code == 503
+    monkeypatch.setenv("DEMO_REPO", "someone/else")
+    monkeypatch.setenv("DEMO_GITHUB_TOKEN", "x")
+    assert client.get("/api/demo-issues").status_code == 403
