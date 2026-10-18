@@ -19,8 +19,9 @@ Every organization has two org charts:
 2. **The Real One (`KNOWS`)**: Lives in decision history, KEP authorship, code reviews, and approvals.
 
 ### What Lore Discovered on Real Kubernetes Data
-- **760+ People, 679 Decisions (KEPs), 450 Feature Gates, 59 Releases, and 8,700+ Connections**.
+- **1,636 People, 679 Decisions (KEPs), 2,078 Merged PRs, 986 Issues, 645 Code Folders, 450 Feature Gates, 59 Releases, and 57,000+ Connections**.
 - **Owns vs. Knows Gap**: In SIG Node, 3 of the top 8 contributors with the highest decision impact (`tallclair` with 31 decisions, `ffromani` with 21, `thockin` with 20) are **not** on the official team leadership chart.
+- **Same gap in code review**: In each of the 5 teams we loaded, 5 or 6 of the top 8 PR reviewers are not that team's official leaders. `liggitt` (a SIG Auth lead) is a top-2 reviewer in all five.
 - **Decision Trail & Replacements**: Traces decisions across an 8-year evolution (e.g. *Coscheduling* (KEP-583, 2018) &rarr; *Gang Scheduling* (KEP-4671, 2025) &rarr; *Decouple PodGroup API* (KEP-5832, 2026)).
 - **Stale Decision Catch**: Surfaces decisions marked `implementable` at alpha stage that have gone untouched for 8+ releases.
 - **Actionable Routing**: Triage incoming issues to the real experts and approve actions via `/api/actions/approve`.
@@ -59,6 +60,7 @@ Every organization has two org charts:
    # From host (connecting to localhost:6379 forwarded internally):
    FALKORDB_HOST=127.0.0.1 FALKORDB_PORT=6379 python scripts/load_k8s_brain.py data/
    ```
+   To also load PRs, issues and code owners, follow [📥 Load the data](#-load-the-data).
 
 5. **Open Lore in your browser**:
    Navigate to [http://localhost:8000](http://localhost:8000) and click any of the example questions!
@@ -92,6 +94,7 @@ Every organization has two org charts:
    ```bash
    FALKORDB_HOST=localhost FALKORDB_PORT=6379 python scripts/load_k8s_brain.py data/
    ```
+   To also load PRs, issues and code owners, follow [📥 Load the data](#-load-the-data).
 
 5. **Start the FastAPI Server**:
    ```bash
@@ -100,6 +103,114 @@ Every organization has two org charts:
 
 6. **Open the Web UI**:
    Visit [http://localhost:8000](http://localhost:8000).
+
+---
+
+## 📥 Load the data
+
+Run these from the repo root while FalkorDB is up. Downloads stay in `data/`, which is not committed.
+
+1. **Teams and design decisions (KEPs).** Download `sigs.yaml` and the KEPs (Option 2, step 3), then:
+   ```bash
+   FALKORDB_HOST=localhost python scripts/load_k8s_brain.py data/
+   ```
+   This step starts the `k8s` graph from scratch. Steps 2 and 3 only add to it, so they are safe to re-run.
+
+2. **GitHub PRs and issues** for sig-node, sig-scheduling, sig-auth, sig-storage and sig-network (12 months).
+   Put `GITHUB_TOKEN=...` in `.env`. Every answer is cached in `data/raw/`, so a re-run continues where it stopped.
+   ```bash
+   python scripts/fetch_github.py
+   FALKORDB_HOST=localhost python scripts/load_github.py
+   ```
+
+3. **Official code owners** from the `OWNERS` files of `kubernetes/kubernetes` (downloads only those files, about 6 MB):
+   ```bash
+   git clone --depth 1 --filter=blob:none --sparse https://github.com/kubernetes/kubernetes data/k8s-owners
+   git -C data/k8s-owners sparse-checkout set --no-cone "**/OWNERS" "/OWNERS_ALIASES"
+   FALKORDB_HOST=localhost python scripts/load_owners.py
+   ```
+   On Windows Git Bash, start the `sparse-checkout` line with `MSYS_NO_PATHCONV=1`. Otherwise Git Bash turns
+   `/OWNERS_ALIASES` into a Windows path and that file is never downloaded.
+
+## 🧠 Graph model (FalkorDB graph `k8s`)
+
+Counts from the full load on 2026-10-18: **6,852 nodes and 57,379 edges**.
+GitHub data: `kubernetes/kubernetes` PRs merged and issues created from 2025-10-18 to 2026-10-18 with a
+`sig/node`, `sig/scheduling`, `sig/auth`, `sig/storage` or `sig/network` label.
+
+| Node | Key properties | Count | Loaded by |
+| :--- | :--- | ---: | :--- |
+| `Person` | `login` (lowercase), `display` | 1,636 | every loader |
+| `Team` | `key` (e.g. `sig-node`), `name`, `kind` | 52 | `load_k8s_brain.py` (`sigs.yaml`) |
+| `Subproject` | `name` | 240 | `load_k8s_brain.py` |
+| `KEP` | `num`, `title`, `status`, `stage`, `created`, `latest`, `path` (its folder in kubernetes/enhancements) | 679 | `load_k8s_brain.py` (`kep.yaml`) |
+| `FeatureGate` | `name` | 450 | `load_k8s_brain.py` |
+| `Component` | `name` | 27 | `load_k8s_brain.py` |
+| `Release` | `version` | 59 | `load_k8s_brain.py` |
+| `PR` | `num`, `title`, `created`, `merged` | 2,078 | `load_github.py` |
+| `Issue` | `num`, `title`, `created`, `closed`, `state` | 986 | `load_github.py` |
+| `Folder` | `path` (e.g. `pkg/scheduler/framework`) | 645 | `load_github.py` |
+
+```
+DECISIONS (load_k8s_brain.py)                            count
+(Person)-[:LEADS {role}]->(Team)                           174
+(Team)-[:HAS_SUBPROJECT]->(Subproject)                     241
+(Person)-[:AUTHORED]->(KEP)                              1,149
+(Person)-[:REVIEWED]->(KEP)                              1,952
+(Person)-[:APPROVED]->(KEP)                              1,286
+(KEP)-[:OWNED_BY]->(Team)                                  683
+(KEP)-[:INVOLVES]->(Team)                                  487
+(KEP)-[:REPLACES]->(KEP)                                     9
+(KEP)-[:SEE_ALSO]->(KEP)                                   298
+(KEP)-[:INTRODUCES]->(FeatureGate)                         478
+(FeatureGate)-[:USED_IN]->(Component)                      741
+(KEP)-[:REACHED {stage}]->(Release)                      1,273
+
+WORK (load_github.py)
+(Person)-[:AUTHORED {at}]->(PR)                          2,078
+(Person)-[:REVIEWED {at, state}]->(PR)                   3,328
+(Person)-[:LGTM {at}]->(PR)                              2,136   a comment had a /lgtm line
+(Person)-[:APPROVED {at}]->(PR)                          1,600   a comment had an /approve line
+(Person)-[:AUTHORED {at}]->(Issue)                         986
+(Person)-[:COMMENTED {at}]->(Issue)                      2,484
+(Person)-[:ASSIGNED]->(Issue)                              614
+(PR)-[:FOR_TEAM]->(Team)                                 3,131
+(Issue)-[:FOR_TEAM]->(Team)                              1,046
+(PR)-[:TOUCHES]->(Folder)                               10,172
+
+OFFICIAL CODE OWNERS (load_owners.py, from OWNERS files)
+(Person)-[:APPROVER_OF {source}]->(Folder)               9,285
+(Person)-[:REVIEWER_OF {source}]->(Folder)              11,748
+```
+
+How to read it:
+- **One Person per login.** Logins are lowercased, fixed with `data/aliases.yaml` and bots are dropped (one shared rule in `scripts/logins.py`).
+- **`AUTHORED`, `REVIEWED` and `APPROVED` point to both KEPs and PRs**, so always label the target in queries: `(k:KEP)` or `(pr:PR)`.
+- **`at`** is the person's earliest date on that PR or issue (ISO text such as `2026-01-05T12:34:56Z`, which sorts correctly as text).
+- **`REVIEWED`** is one edge per person per PR. `state` is their strongest verdict: `APPROVED`, then `CHANGES_REQUESTED`, then `COMMENTED`.
+- **The author doesn't count as their own reviewer.** A PR author's own reviews, `/lgtm` and `/approve` aren't counted, and neither are comments on their own issue.
+- **`FOR_TEAM`** links an item to every slice team whose `sig/*` label it has (519 PRs have two or more).
+- **`Folder`** is the first 3 folder levels of a changed file. Under `staging/src/` it's the 3 levels after that (e.g. `staging/src/k8s.io/kubelet/pkg`), so each staging library gets its own folders.
+- **`APPROVER_OF` / `REVIEWER_OF`** follow Prow's rules: the nearest OWNERS file plus its parents, stopping at `no_parent_owners`. `source` is the OWNERS file that lists the person, e.g. `pkg/scheduler/OWNERS`.
+
+Top PR reviewers of a team, marked if they are official leaders (`scripts/load_github.py` prints this for all 5 teams):
+```cypher
+MATCH (:Team {key:$team})<-[:FOR_TEAM]-(:PR)<-[e:REVIEWED|LGTM|APPROVED]-(p:Person)
+WITH p, count(e) AS total ORDER BY total DESC LIMIT 8
+OPTIONAL MATCH (p)-[:LEADS]->(lt:Team)
+RETURN p.display, total, $team IN collect(lt.key) AS official_leader ORDER BY total DESC
+```
+
+## ⚠️ Data quirks
+
+- OWNERS files are today's version, not historical, so the reviewer test compares against today's official list.
+- `/lgtm cancel` and `/approve cancel` count as LGTM and APPROVED: the download keeps only a yes/no flag per comment, not its text.
+- The download keeps the first 100 changed files and 50 reviews of a PR; 74 PRs have more files and 74 more reviews.
+- `ASSIGNED` has no date: the download doesn't include when someone was assigned.
+- Files in the repo root (`go.mod`, `go.sum`, ...) have no `Folder`.
+- `liggit` (11 KEP links) is a typo for `liggitt` and is merged via `data/aliases.yaml`. More likely KEP typos
+  (e.g. `ligitt`, `saadali`, `gnuified`) are not merged yet: each needs a person to confirm it first.
+- In `OWNERS` files, every list under `filters:` is merged. So `staging/OWNERS`'s approvers for `go.mod`/`go.sum` count as approvers of every staging folder.
 
 ---
 
@@ -224,3 +335,10 @@ Run automated tests:
 pytest -o pythonpath=. tests/test_server.py
 ```
 All 6 tests verify page serving, FalkorDB health ping, verified stub response, decision trails, rate limiting enforcement, and approve action flows.
+
+The graph tools (`app/tools.py`: `who_owns`, `who_knows`, `why`, `whats_stale`, `route_issue`; contract in
+[`docs/tool_contract.md`](docs/tool_contract.md) section 4) are tested on the real graph. These tests skip
+themselves until all three loaders in [📥 Load the data](#-load-the-data) have run:
+```bash
+pytest -o pythonpath=. tests/test_tools.py
+```
