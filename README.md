@@ -59,6 +59,7 @@ Every organization has two org charts:
    # From host (connecting to localhost:6379 forwarded internally):
    FALKORDB_HOST=127.0.0.1 FALKORDB_PORT=6379 python scripts/load_k8s_brain.py data/
    ```
+   To also load PRs, issues and code owners, follow [📥 Load the data](#-load-the-data).
 
 5. **Open Lore in your browser**:
    Navigate to [http://localhost:8000](http://localhost:8000) and click any of the example questions!
@@ -92,6 +93,7 @@ Every organization has two org charts:
    ```bash
    FALKORDB_HOST=localhost FALKORDB_PORT=6379 python scripts/load_k8s_brain.py data/
    ```
+   To also load PRs, issues and code owners, follow [📥 Load the data](#-load-the-data).
 
 5. **Start the FastAPI Server**:
    ```bash
@@ -100,6 +102,38 @@ Every organization has two org charts:
 
 6. **Open the Web UI**:
    Visit [http://localhost:8000](http://localhost:8000).
+
+---
+
+## 📥 Load the data
+
+Run these from the repo root while FalkorDB is up. Downloads stay in `data/`, which is not committed.
+
+1. **Teams and design decisions (KEPs).** Download `sigs.yaml` and the KEPs (Option 2, step 3), then:
+   ```bash
+   FALKORDB_HOST=localhost python scripts/load_k8s_brain.py data/
+   ```
+   This step starts the `k8s` graph from scratch. Steps 2 and 3 only add to it, so they are safe to re-run.
+
+2. **GitHub PRs and issues** for sig-node, sig-scheduling, sig-auth, sig-storage and sig-network (12 months).
+   Put `GITHUB_TOKEN=...` in `.env`. Every answer is cached in `data/raw/`, so a re-run continues where it stopped.
+   ```bash
+   python scripts/fetch_github.py
+   FALKORDB_HOST=localhost python scripts/load_github.py
+   ```
+
+3. **Official code owners** from the `OWNERS` files of `kubernetes/kubernetes` (downloads only those files, about 6 MB):
+   ```bash
+   git clone --depth 1 --filter=blob:none --sparse https://github.com/kubernetes/kubernetes data/k8s-owners
+   git -C data/k8s-owners sparse-checkout set --no-cone "**/OWNERS" "/OWNERS_ALIASES"
+   FALKORDB_HOST=localhost python scripts/load_owners.py
+   ```
+   On Windows Git Bash, start the `sparse-checkout` line with `MSYS_NO_PATHCONV=1`. Otherwise Git Bash turns
+   `/OWNERS_ALIASES` into a Windows path and that file is never downloaded.
+
+## ⚠️ Data quirks
+
+- OWNERS files are today's version, not historical, so the reviewer test compares against today's official list.
 
 ---
 
