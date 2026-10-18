@@ -76,7 +76,9 @@ The graph name in FalkorDB is **`k8s`**.
 - **Description**: Submits an organizational or design decision query to the Lore AI Agent.
 - **Rate Limit**: **20 requests per minute** per client IP. Returns `429 Too Many Requests` on violation.
 - **Timeout & Failure Protection**: 60-second execution deadline. If the agent crashes or exceeds 60 seconds, returns `500 Internal Server Error` with `{"error": "..."}`. Never returns a blank response.
-- **Stub Behavior**: Until `app.agent.ask()` is implemented by Agent developer A, returns the verifiable stub response below with `"is_stub": true`.
+- **Who answers**: the AI agent (`app/agent.py`) when `LLM_API_KEY` is set; otherwise, or when the model fails, times out or hits its quota, the graph answer (`app/brain.py`). The fixed stub below (`"is_stub": true`) is used only when FalkorDB is unreachable.
+- **Real response fields** (agent and graph answer alike): `answer`, `steps[]` (`tool`, `input`, `summary`), `evidence` (`nodes`, `edges`, same rules as section 4), `sources[]` (`n`, `type`, `ref`, `title`, `url`; `[n]` in `answer` cites source `n`), `is_stub`, `draft` (`{comment, label}` when an issue was routed, else absent or null), plus the page fields `official_owners`, `actual_knowers`, `decision_trail` and `graph` (same as `evidence`).
+- **Bad input**: an empty or 2,000+ character question returns `400 {"error": "Ask a question of 1 to 2,000 characters."}`.
 
 ##### Request:
 - **Headers**: `Content-Type: application/json`
@@ -291,7 +293,9 @@ Five plain Python functions the agent can call. Each runs Cypher on the `k8s` gr
 
 - **Node ids** are `<type>:<key>`: `team:sig-node`, `person:liggitt`, `kep:4671`, `pr:12345`, `folder:pkg/scheduler/framework`, `gate:GenericWorkload`.
 - **Every edge's `source` and `target` are in `nodes`**, and `evidence` holds at most 25 nodes. It uses the same field names as the `graph` part of `/api/ask`, but node ids carry the type prefix.
-- **`sources`** keeps `type`/`ref`/`title` (what the web page shows) and adds a real `url`: a KEP folder, `https://github.com/kubernetes/kubernetes/pull/N`, an OWNERS file, or the team's page in kubernetes/community.
+- **Every node** has `id`, `label` and `type`. **Every `Person` node** also has `official` (true if an official owner of what was asked) and `score` (how much evidence they have; 0 when not counted).
+- **Every edge** has `source`, `target`, `relation` and `label` (the text to show; same as `relation`), plus extra facts such as `at` or `role`.
+- **`sources`** are numbered `n` = 1, 2, … and keep `type`/`ref`/`title` (what the web page shows) with a real `url`: a KEP folder, `https://github.com/kubernetes/kubernetes/pull/N`, an OWNERS file, or the team's page in kubernetes/community.
 - **`thing`** can be:
   - a team: `sig-node`, `SIG Node`, `node`
   - a KEP: `KEP-4671`, `4671`, or its exact title

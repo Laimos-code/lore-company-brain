@@ -44,8 +44,13 @@ def envelope(result, tool, stub=False):
         assert {"id", "label", "type"} <= set(n) and NODE_ID.match(n["id"]), n
     for e in edges:
         assert e["source"] in ids and e["target"] in ids, f"dangling edge {e}"
-    for s in result["sources"]:
+        assert stub or e["label"], e
+    for n in nodes:
+        if n["type"] == "Person" and not stub:
+            assert isinstance(n["official"], bool) and isinstance(n["score"], (int, float)), n
+    for i, s in enumerate(result["sources"], 1):
         assert {"type", "ref", "title", "url"} <= set(s)
+        assert stub or s["n"] == i, s
         assert stub or s["url"].startswith("https://github.com/kubernetes/"), s
     return result["data"]
 

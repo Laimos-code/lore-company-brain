@@ -93,8 +93,14 @@ class Evidence:
             key = (e["source"], e["target"], e["relation"])
             if e["source"] in self.nodes and e["target"] in self.nodes and key not in seen:
                 seen.add(key)
-                edges.append(e)
-        return {"nodes": list(self.nodes.values()), "edges": edges}
+                edges.append({**e, "label": e.get("label") or e["relation"]})
+        nodes = []
+        for n in self.nodes.values():
+            if n["type"] == "Person":  # official owner? and how much evidence (0 when not counted)
+                n = {**n, "official": n.get("official", "owner" in str(n.get("status", ""))),
+                     "score": n.get("score", n.get("weight", 0))}
+            nodes.append(n)
+        return {"nodes": nodes, "edges": edges}
 
 
 def _team_id(key): return f"team:{key}"
@@ -106,7 +112,7 @@ def _gate_id(name): return f"gate:{name}"
 
 
 def _envelope(tool, summary, data, ev, sources):
-    unique = list({(s["type"], s["ref"]): s for s in sources}.values())
+    unique = [{**s, "n": i} for i, s in enumerate({(s["type"], s["ref"]): s for s in sources}.values(), 1)]
     return {"tool": tool, "summary": summary, "data": data, "evidence": ev.build(),
             "sources": unique, "is_stub": False}
 
@@ -139,10 +145,16 @@ def _kep_url(num, path):
 KEP_FIELDS = "k.num, k.title, k.status, k.stage, k.created, k.latest, k.path"
 
 
+def _version(v):
+    """kep.yaml files write versions both ways ('v1.37' and '1.37'); always show 'v1.37'."""
+    v = str(v or "")
+    return "v" + v if re.match(r"\d", v) else v
+
+
 def _kep_row(row, team=None):
     num, title, status, stage, created, latest, path = row
     return {"type": "kep", "num": num, "ref": f"KEP-{num}", "title": (title or "").strip(),
-            "status": status, "stage": stage, "created": created, "latest": latest,
+            "status": status, "stage": stage, "created": created, "latest": _version(latest),
             "team": team, "url": _kep_url(num, path)}
 
 
@@ -555,7 +567,7 @@ def why(thing):
                    RETURN type(r), p.login, p.display ORDER BY p.login""", n=key)
     approvers = [{"login": l, "display": d} for t, l, d in people if t == "APPROVED"]
     authors = [{"login": l, "display": d} for t, l, d in people if t == "AUTHORED"]
-    milestones = sorted(({"stage": s, "release": v} for s, v in _q(
+    milestones = sorted(({"stage": s, "release": _version(v)} for s, v in _q(
         "MATCH (:KEP {num:$n})-[r:REACHED]->(v:Release) RETURN r.stage, v.version", n=key)),
         key=lambda m: _minor(m["release"]))
     gates = [r[0] for r in _q("MATCH (:KEP {num:$n})-[:INTRODUCES]->(f:FeatureGate) RETURN f.name ORDER BY f.name", n=key)]
